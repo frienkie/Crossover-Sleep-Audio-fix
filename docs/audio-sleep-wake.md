@@ -58,8 +58,10 @@ sleep/wake invalidation and notifications arriving before and during a control
 wait. These tests call the notification handler directly and do not establish
 real workspace notification delivery or hardware recovery.
 
-The native suite and a standalone optimized, warnings-as-errors compilation of
-router.m passed for this change. A complete Rust application build and physical
-sleep/wake validation remain outstanding. Test simultaneous programs in one
+The native suite, a standalone optimized warnings-as-errors compilation of
+router.m, the locked Rust release build of crosspuck-app, and all 78 application
+tests passed for this change. The application tests require permission to open
+local loopback connections. Physical sleep/wake validation remains outstanding.
+Test simultaneous programs in one
 bottle, independent program restarts, and at least three real sleep/wake cycles,
 comparing per-process inventory with audible output each time.
