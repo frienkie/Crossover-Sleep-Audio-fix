@@ -1,5 +1,6 @@
 // CrossOver-only routing engine. Runs in the supervised CrossPuckAudio helper.
 #import <Foundation/Foundation.h>
+#import <AppKit/NSWorkspace.h>
 #import <CoreAudio/CoreAudio.h>
 #import <CoreAudio/AudioHardwareTapping.h>
 #import <CoreAudio/CATapDescription.h>
@@ -19,6 +20,7 @@
 
 static _Atomic bool stopping;
 static _Atomic uint64_t output_changes;
+static _Atomic bool sleeping;
 static _Atomic bool finished;
 static int shutdown_pipe[2] = {-1, -1};
 static pthread_mutex_t control_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -113,6 +115,14 @@ static OSStatus output_changed(AudioObjectID object, UInt32 count,
     atomic_fetch_add(&output_changes, 1);
     wake_control();
     return noErr;
+}
+
+// A wake can invalidate HAL objects without changing the default device ID.
+// Only invalidate here; the control loop owns route teardown and recreation.
+static void power_changed(BOOL asleep) {
+    atomic_store(&sleeping, asleep);
+    atomic_fetch_add(&output_changes, 1);
+    wake_control();
 }
 
 static AudioObjectPropertyAddress address(AudioObjectPropertySelector selector,
@@ -236,7 +246,8 @@ static NSDictionary *device_info(AudioDeviceID device) {
              @"output_streams":object_list(device, kAudioDevicePropertyStreams, kAudioObjectPropertyScopeOutput)};
 }
 
-// Detailed inventory is only used by --list. The recurring scan skips idle
+// Detailed inventory includes excluded clients, with reasons, only for --list.
+// The recurring scan skips idle
 // clients and reads no device names, UIDs, formats or process environment for
 // clients already playing through the current default output.
 static NSArray<NSDictionary *> *wine_processes(BOOL inventory, AudioDeviceID output) {
@@ -246,7 +257,8 @@ static NSArray<NSDictionary *> *wine_processes(BOOL inventory, AudioDeviceID out
         BOOL running = integer(oid, kAudioProcessPropertyIsRunningOutput, kAudioObjectPropertyScopeGlobal) != 0;
         if (!inventory && !running) continue;
         NSString *bundle = string_property(oid, kAudioProcessPropertyBundleID);
-        if (![bundle hasPrefix:@"com.codeweavers.CrossOver."]) continue;
+        BOOL bundle_matches = [bundle hasPrefix:@"com.codeweavers.CrossOver."];
+        if (!inventory && !bundle_matches) continue;
         pid_t pid = (pid_t)integer(oid, kAudioProcessPropertyPID, kAudioObjectPropertyScopeGlobal);
         if (pid == getpid()) continue;
         NSArray<NSNumber *> *device_ids = object_list(oid, kAudioProcessPropertyDevices, kAudioObjectPropertyScopeOutput);
@@ -257,10 +269,19 @@ static NSArray<NSDictionary *> *wine_processes(BOOL inventory, AudioDeviceID out
             if (!mismatched) continue;
         }
         NSDictionary *identity = wine_identity(pid);
-        if (!identity) continue;
-        NSMutableDictionary *record = [identity mutableCopy];
-        record[@"pid"] = @(pid); record[@"audio_object"] = object; record[@"bundle"] = bundle;
+        if (!inventory && !identity) continue;
+        NSMutableDictionary *record = [NSMutableDictionary dictionaryWithDictionary:identity ?: @{}];
+        record[@"pid"] = @(pid); record[@"audio_object"] = object; record[@"bundle"] = bundle ?: @"";
         record[@"running_output"] = @(running);
+        if (inventory) {
+            BOOL mismatched = NO;
+            for (NSNumber *device in device_ids)
+                if (device.unsignedIntValue != output) mismatched = YES;
+            record[@"selection_reason"] = !bundle_matches ? @"bundle_id_mismatch" :
+                !identity ? @"unverified_bottle" : !running ? @"inactive" :
+                !device_ids.count ? @"no_reported_output_devices" :
+                !mismatched ? @"already_default" : @"routing_target";
+        }
         NSMutableArray *devices = [NSMutableArray array];
         for (NSNumber *device in device_ids)
             [devices addObject:inventory ? device_info(device.unsignedIntValue) : @{@"id":device}];
@@ -502,7 +523,7 @@ static int route_once(void) {
         if (!checked(AudioDeviceCreateIOProcID(aggregate, audio_io, ctx, &io), "create IOProc (System Audio Recording permission)")) goto cleanup;
         if (!disable_physical_inputs(aggregate, io, ctx->physical_input_streams)) goto cleanup;
         signature = format_signature(aggregate);
-        if (stopping || default_output() != output || atomic_load(&output_changes) != generation) {
+        if (stopping || atomic_load(&sleeping) || default_output() != output || atomic_load(&output_changes) != generation) {
             result = RouteChanged; goto cleanup;
         }
         if (!checked(AudioDeviceStart(aggregate, io), "start audio")) goto cleanup;
@@ -517,7 +538,7 @@ static int route_once(void) {
                     double now = monotonic_seconds();
                     if (now >= next_health) {
                         next_health = now + 0.2;
-                        if (default_output() != output || atomic_load(&output_changes) != generation ||
+                        if (atomic_load(&sleeping) || default_output() != output || atomic_load(&output_changes) != generation ||
                             !integer(output, kAudioDevicePropertyDeviceIsAlive, kAudioObjectPropertyScopeGlobal) ||
                             fabs(sample_rate(output) - rate) > 0.01) { result = RouteChanged; break; }
                     }
@@ -603,11 +624,26 @@ static int run_routes(void) {
         close(lease);
         return 1;
     }
+    NSNotificationCenter *workspace = NSWorkspace.sharedWorkspace.notificationCenter;
+    id sleepObserver = [workspace addObserverForName:NSWorkspaceWillSleepNotification object:nil queue:nil
+                                        usingBlock:^(NSNotification *note) {
+        (void)note; power_changed(YES);
+    }];
+    id wakeObserver = [workspace addObserverForName:NSWorkspaceDidWakeNotification object:nil queue:nil
+                                       usingBlock:^(NSNotification *note) {
+        (void)note; power_changed(NO);
+    }];
     int result = 0, failures = 0;
     while (!stopping) {
         // Retry-state JSON and transition objects must drain each iteration,
         // including failures that occur before route_once starts its own pool.
         @autoreleasepool {
+            if (atomic_load(&sleeping)) {
+                failures = 0;
+                event(@{@"event":@"heartbeat"});
+                pump(1);
+                continue;
+            }
             result = route_once();
             if (result == RouteStopped || result == RouteCleanupFailed || stopping) break;
             if (result == RouteNative) { failures = 0; wait_for_change(30, YES); }
@@ -625,6 +661,8 @@ static int run_routes(void) {
             }
         }
     }
+    [workspace removeObserver:sleepObserver];
+    [workspace removeObserver:wakeObserver];
     checked(AudioObjectRemovePropertyListener(kAudioObjectSystemObject, &a, output_changed, NULL), "remove output watcher");
     close(lease);
     return result == RouteCleanupFailed ? result : 0;
@@ -654,11 +692,13 @@ static void finish_parent_watch(pthread_t watcher) {
 int crosspuck_audio_main(bool list_only) {
     @autoreleasepool {
         if (list_only) {
-            event(@{@"event":@"inventory", @"processes":wine_processes(YES, 0), @"output":device_info(default_output())}); return 0;
+            AudioDeviceID output = default_output();
+            event(@{@"event":@"inventory", @"processes":wine_processes(YES, output), @"output":device_info(output)}); return 0;
         }
         struct stat pipe_stat;
         if (fstat(STDIN_FILENO, &pipe_stat) || !S_ISFIFO(pipe_stat.st_mode)) return 2;
         atomic_init(&stopping, false); atomic_init(&finished, false); atomic_init(&output_changes, 0);
+        atomic_init(&sleeping, false);
         if (!atomic_is_lock_free(&stopping) || !setup_control_wait()) return 2;
         pthread_t watcher;
         if (!start_parent_watch(&watcher)) { teardown_control_wait(); return 2; }

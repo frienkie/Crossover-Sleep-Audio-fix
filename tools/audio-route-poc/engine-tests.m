@@ -32,6 +32,37 @@ static void test_control_wait(void) {
     teardown_control_wait();
 }
 
+static void *notify_power_later(void *unused) {
+    (void)unused;
+    usleep(50000);
+    power_changed(NO);
+    return NULL;
+}
+
+static void test_power_invalidation(void) {
+    assert(setup_control_wait());
+    atomic_store(&stopping, false);
+    uint64_t generation = atomic_load(&output_changes);
+    // Even a same-device sleep/wake round trip must invalidate the route.
+    power_changed(YES);
+    assert(atomic_load(&sleeping));
+    assert(atomic_load(&output_changes) == generation + 1);
+    power_changed(NO);
+    assert(!atomic_load(&sleeping));
+    assert(atomic_load(&output_changes) == generation + 2);
+    double start = monotonic_seconds();
+    pump(2); // Notification before waiting is retained.
+    assert(monotonic_seconds() - start < 1);
+    pthread_t notifier;
+    assert(!pthread_create(&notifier, NULL, notify_power_later, NULL));
+    start = monotonic_seconds();
+    pump(2); // Notification during waiting wakes the control loop.
+    assert(monotonic_seconds() - start < 1);
+    pthread_join(notifier, NULL);
+    assert(atomic_load(&output_changes) == generation + 3);
+    teardown_control_wait();
+}
+
 static void test_parent_watch(void) {
     int saved_stdin = dup(STDIN_FILENO);
     assert(saved_stdin >= 0);
@@ -68,6 +99,7 @@ static void test_parent_watch(void) {
 int main(void) {
     @autoreleasepool {
         test_control_wait();
+        test_power_invalidation();
         test_parent_watch();
         int argc = 2;
         const char args[] = "/path/wine\0\0game.exe\0--play\0\0\0UNRELATED=test\0WINEPREFIX=/bottles/Test\0SECRET=not-retained\0";

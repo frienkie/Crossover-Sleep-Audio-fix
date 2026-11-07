@@ -13,6 +13,7 @@ fn main() {
         .warnings_into_errors(true)
         .compile("crosspuck_audio");
     println!("cargo:rustc-link-lib=framework=Foundation");
+    println!("cargo:rustc-link-lib=framework=AppKit");
     println!("cargo:rustc-link-lib=framework=CoreAudio");
     println!("cargo:rustc-link-arg-bin=CrossPuckAudio=-mmacosx-version-min=14.2");
 }
