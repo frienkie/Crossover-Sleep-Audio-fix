@@ -10,7 +10,7 @@
 
 例如：睡眠前用显示器音箱、USB 音箱或耳机玩游戏，唤醒后声音却从 Mac 自带的扬声器传出。即使在 macOS 中重新选好了外部音响，CrossOver 里的游戏仍没有跟着切换。
 
-本工具会让正在运行的 CrossOver 程序跟随 **macOS 当前选择的音频输出**，并在睡眠唤醒后重新检查和恢复必要的声音转发。它面向外接音响、显示器扬声器和耳机等输出切换场景，不需要 Steam，也不需要安装 Windows 驱动。
+本工具会让正在运行的 CrossOver 程序跟随 **macOS 当前选择的音频输出**，并在睡眠唤醒后重新检查和恢复必要的声音转发。它面向外接音响、显示器扬声器和耳机等输出切换场景。实现部分来源于CrossPuck的启发。
 
 ### 怎么使用？
 
@@ -47,7 +47,7 @@
 
 たとえば、スリープ前はモニターのスピーカー、USB スピーカー、ヘッドホンでゲームの音を聞いていたのに、復帰後は Mac 本体から音が出る場合です。macOS で外部出力を選び直しても、CrossOver のゲームだけ切り替わらないことがあります。
 
-このツールは、実行中の CrossOver アプリの音を **macOS で現在選択している出力先**に追従させ、スリープ復帰時に接続を確認し、必要な音声転送を作り直します。Steam や Windows 用ドライバーのインストールは不要です。
+このツールは、実行中の CrossOver アプリの音を **macOS で現在選択している出力先**に追従させ、スリープ復帰時に接続を確認し、必要な音声転送を作り直します。実装の一部は CrossPuck から着想を得ています。
 
 ### 使い方
 
@@ -84,7 +84,7 @@
 
 For example, your game plays through monitor speakers, USB speakers or headphones before sleep, but through the Mac itself after wake. Selecting the external output again in macOS may still leave the CrossOver game playing through the built-in speakers.
 
-The app keeps running CrossOver programs following **the output currently selected in macOS**. After wake, it checks the connection and rebuilds audio forwarding when needed. It does not require Steam or a Windows driver.
+The app keeps running CrossOver programs following **the output currently selected in macOS**. After wake, it checks the connection and rebuilds audio forwarding when needed. Parts of the implementation are inspired by CrossPuck.
 
 ### How to use it
 
