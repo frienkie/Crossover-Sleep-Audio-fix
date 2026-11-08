@@ -47,7 +47,7 @@ Core Audio process objects except the helper itself, including excluded clients.
 The original inventory filtered out bundle and bottle mismatches, so their
 absence from an old helper's inventory is inconclusive. Automatic capture
 eligibility is unchanged by the expanded diagnostics. Only the parsed command
-name and WINEPREFIX are retained from process arguments; unrelated environment
+name, WINEPREFIX or CX_BOTTLE_PATH are retained from process arguments; unrelated environment
 values are discarded. Property-read failures are still represented as zero or
 empty metadata, so the inventory does not distinguish every HAL error.
 
@@ -65,3 +65,29 @@ local loopback connections. Physical sleep/wake validation remains outstanding.
 Test simultaneous programs in one
 bottle, independent program restarts, and at least three real sleep/wake cycles,
 comparing per-process inventory with audible output each time.
+
+## CrossOver-generated application shortcuts
+
+An active audio client launched through a generated application shortcut can
+report a `com.codeweavers.CrossOverHelper.*` bundle ID and run as `Menu Helper`.
+The previous filter accepted only `com.codeweavers.CrossOver.*`. The helper can
+also lack WINEPREFIX in its initial process arguments, while providing the
+colon-separated CX_BOTTLE_PATH search path. These are independent exclusions:
+accepting the bundle ID alone still fails the original bottle verification.
+
+Both bundle prefixes are now accepted. Direct Wine clients still use verified
+WINEPREFIX. For a generated helper without that variable, the engine checks the
+actual executable path returned by proc_pidpath against its application's
+CFBundleExecutable and matches the bundle ID with the Core Audio identity.
+It reads CXHelperAppBottleName from that bundle and follows CX_BOTTLE_PATH
+search order, requiring system.reg and a regular cxbottle.conf file. Relative
+search roots, invalid bottle names, mismatched executables and bundle IDs are
+rejected. It does not execute the shortcut command or alter the bottle.
+
+The inventory marks this fallback as
+`identity_source: crossover_helper_bundle`. Native sanitizer tests cover helper
+argument parsing, explicit WINEPREFIX precedence, matching and mismatched
+identities, paths with spaces, missing bottle files, and duplicate bottle-name
+search precedence. A live read-only check confirmed a previously excluded
+active helper is now a routing target. Audible playback and repeated sleep/wake
+recovery still require validation after installation.

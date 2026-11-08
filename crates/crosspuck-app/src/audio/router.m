@@ -189,7 +189,7 @@ static BOOL checked(OSStatus status, const char *operation) {
     return NO;
 }
 
-// Only argv[0] and WINEPREFIX leave this parser; unrelated environment values
+// Only argv[0] and bottle-location variables leave this parser; unrelated values
 // are never retained in diagnostics or sent to the parent.
 static NSDictionary *wine_arguments(NSData *data) {
     size_t size = data.length;
@@ -207,7 +207,7 @@ static NSDictionary *wine_arguments(NSData *data) {
         if (i == 0) command = [[NSString alloc] initWithBytes:cursor length:len encoding:NSUTF8StringEncoding];
         cursor += len + 1;
     }
-    NSString *prefix = nil;
+    NSString *prefix = nil, *bottle_search_path = nil;
     while (cursor < end) {
         // KERN_PROCARGS2 can pad the argv/environment boundary with NULs.
         while (cursor < end && !*cursor) ++cursor;
@@ -216,15 +216,61 @@ static NSDictionary *wine_arguments(NSData *data) {
         if (cursor + len == end) break;
         if (len > 11 && !memcmp(cursor, "WINEPREFIX=", 11)) {
             prefix = [[NSString alloc] initWithBytes:cursor + 11 length:len - 11 encoding:NSUTF8StringEncoding];
-            break;
+        } else if (len > 15 && !memcmp(cursor, "CX_BOTTLE_PATH=", 15)) {
+            bottle_search_path = [[NSString alloc] initWithBytes:cursor + 15 length:len - 15 encoding:NSUTF8StringEncoding];
         }
         cursor += len + 1;
     }
-    if (!prefix.length) return nil;
-    return @{@"command":command ?: @"", @"bottle_path":prefix};
+    if (prefix.length) return @{@"command":command ?: @"", @"bottle_path":prefix};
+    if (bottle_search_path.length) return @{@"command":command ?: @"", @"bottle_search_path":bottle_search_path};
+    return nil;
 }
 
-static NSDictionary *wine_identity(pid_t pid) {
+static BOOL crossover_bundle(NSString *bundle) {
+    return [bundle hasPrefix:@"com.codeweavers.CrossOver."] ||
+           [bundle hasPrefix:@"com.codeweavers.CrossOverHelper."];
+}
+
+static NSString *verified_bottle_path(NSString *path) {
+    if (!path.isAbsolutePath) return nil;
+    NSString *prefix = path.stringByResolvingSymlinksInPath.stringByStandardizingPath;
+    BOOL directory = NO;
+    if (![[NSFileManager defaultManager] fileExistsAtPath:[prefix stringByAppendingPathComponent:@"cxbottle.conf"]
+                                             isDirectory:&directory] || directory) return nil;
+    return prefix;
+}
+
+// CrossOver's generated app shortcuts can own audio under their Menu Helper
+// PID without WINEPREFIX in KERN_PROCARGS2. Bind the actual executable's bundle
+// to the Core Audio identity before using its bottle name and search path.
+static NSDictionary *helper_identity(NSString *executable, NSString *bundle_id, NSString *search_path) {
+    if (![bundle_id hasPrefix:@"com.codeweavers.CrossOverHelper."] || !executable.isAbsolutePath) return nil;
+    NSString *macos = executable.stringByDeletingLastPathComponent;
+    NSString *contents = macos.stringByDeletingLastPathComponent;
+    NSString *app = contents.stringByDeletingLastPathComponent;
+    if (![macos.lastPathComponent isEqual:@"MacOS"] || ![contents.lastPathComponent isEqual:@"Contents"] ||
+        ![app.pathExtension isEqual:@"app"]) return nil;
+    NSBundle *bundle = [NSBundle bundleWithPath:app];
+    if (![bundle.bundleIdentifier isEqual:bundle_id] ||
+        ![bundle.executablePath.stringByResolvingSymlinksInPath isEqual:executable.stringByResolvingSymlinksInPath]) return nil;
+    id name = [bundle objectForInfoDictionaryKey:@"CXHelperAppBottleName"];
+    if (![name isKindOfClass:NSString.class] || ![name length] || [name containsString:@"/"] ||
+        [name isEqual:@"."] || [name isEqual:@".."]) return nil;
+    // Match CrossOver's colon-separated CX_BOTTLE_PATH lookup order. A bottle
+    // earlier in the path must not be silently replaced by a later namesake.
+    for (NSString *root in [search_path componentsSeparatedByString:@":"]) {
+        if (!root.isAbsolutePath) continue;
+        NSString *candidate = [root stringByAppendingPathComponent:name];
+        BOOL directory = NO;
+        if (![[NSFileManager defaultManager] fileExistsAtPath:[candidate stringByAppendingPathComponent:@"system.reg"]
+                                                 isDirectory:&directory] || directory) continue;
+        NSString *prefix = verified_bottle_path(candidate);
+        return prefix ? @{@"command":executable, @"bottle_path":prefix, @"identity_source":@"crossover_helper_bundle"} : nil;
+    }
+    return nil;
+}
+
+static NSDictionary *wine_identity(pid_t pid, NSString *bundle) {
     int mib[] = {CTL_KERN, KERN_PROCARGS2, pid};
     size_t size = 0;
     if (sysctl(mib, 3, NULL, &size, NULL, 0) != 0 || size > 1024 * 1024) return nil;
@@ -233,9 +279,13 @@ static NSDictionary *wine_identity(pid_t pid) {
     data.length = size;
     NSDictionary *args = wine_arguments(data);
     if (!args) return nil;
-    NSString *prefix = [args[@"bottle_path"] stringByResolvingSymlinksInPath].stringByStandardizingPath;
-    if (![[NSFileManager defaultManager] fileExistsAtPath:[prefix stringByAppendingPathComponent:@"cxbottle.conf"]]) return nil;
-    return @{@"command":args[@"command"], @"bottle_path":prefix};
+    if (args[@"bottle_path"]) {
+        NSString *prefix = verified_bottle_path(args[@"bottle_path"]);
+        return prefix ? @{@"command":args[@"command"], @"bottle_path":prefix} : nil;
+    }
+    char executable[PROC_PIDPATHINFO_MAXSIZE];
+    if (proc_pidpath(pid, executable, sizeof(executable)) <= 0) return nil;
+    return helper_identity(@(executable), bundle, args[@"bottle_search_path"]);
 }
 
 static NSDictionary *device_info(AudioDeviceID device) {
@@ -257,7 +307,7 @@ static NSArray<NSDictionary *> *wine_processes(BOOL inventory, AudioDeviceID out
         BOOL running = integer(oid, kAudioProcessPropertyIsRunningOutput, kAudioObjectPropertyScopeGlobal) != 0;
         if (!inventory && !running) continue;
         NSString *bundle = string_property(oid, kAudioProcessPropertyBundleID);
-        BOOL bundle_matches = [bundle hasPrefix:@"com.codeweavers.CrossOver."];
+        BOOL bundle_matches = crossover_bundle(bundle);
         if (!inventory && !bundle_matches) continue;
         pid_t pid = (pid_t)integer(oid, kAudioProcessPropertyPID, kAudioObjectPropertyScopeGlobal);
         if (pid == getpid()) continue;
@@ -268,7 +318,7 @@ static NSArray<NSDictionary *> *wine_processes(BOOL inventory, AudioDeviceID out
                 if (device.unsignedIntValue != output) mismatched = YES;
             if (!mismatched) continue;
         }
-        NSDictionary *identity = wine_identity(pid);
+        NSDictionary *identity = wine_identity(pid, bundle);
         if (!inventory && !identity) continue;
         NSMutableDictionary *record = [NSMutableDictionary dictionaryWithDictionary:identity ?: @{}];
         record[@"pid"] = @(pid); record[@"audio_object"] = object; record[@"bundle"] = bundle ?: @"";

@@ -96,11 +96,53 @@ static void test_parent_watch(void) {
     atomic_store(&stopping, false);
 }
 
+static void test_helper_identity(void) {
+    assert(crossover_bundle(@"com.codeweavers.CrossOver.wine"));
+    assert(crossover_bundle(@"com.codeweavers.CrossOverHelper.TEST"));
+    assert(!crossover_bundle(@"com.codeweavers.CrossOverHelperOther.TEST"));
+    assert(!crossover_bundle(@"org.example.player"));
+    NSString *root = [NSTemporaryDirectory() stringByAppendingPathComponent:NSUUID.UUID.UUIDString];
+    NSString *app = [root stringByAppendingPathComponent:@"Example Game.app"];
+    NSString *contents = [app stringByAppendingPathComponent:@"Contents"];
+    NSString *macos = [contents stringByAppendingPathComponent:@"MacOS"];
+    NSString *executable = [macos stringByAppendingPathComponent:@"Menu Helper"];
+    NSFileManager *fm = NSFileManager.defaultManager;
+    assert([fm createDirectoryAtPath:macos withIntermediateDirectories:YES attributes:nil error:NULL]);
+    NSDictionary *info = @{@"CFBundleIdentifier":@"com.codeweavers.CrossOverHelper.TEST",
+                           @"CFBundleExecutable":@"Menu Helper", @"CFBundlePackageType":@"APPL",
+                           @"CXHelperAppBottleName":@"Example Bottle"};
+    assert([info writeToFile:[contents stringByAppendingPathComponent:@"Info.plist"] atomically:YES]);
+    assert([[NSData data] writeToFile:executable atomically:YES]);
+    NSString *first = [root stringByAppendingPathComponent:@"first"];
+    NSString *second = [root stringByAppendingPathComponent:@"external drive"];
+    NSString *bottle = [second stringByAppendingPathComponent:@"Example Bottle"];
+    assert([fm createDirectoryAtPath:bottle withIntermediateDirectories:YES attributes:nil error:NULL]);
+    NSString *search = [NSString stringWithFormat:@"relative::%@:%@", first, second];
+    assert(helper_identity(executable, info[@"CFBundleIdentifier"], search) == nil);
+    assert([[NSData data] writeToFile:[bottle stringByAppendingPathComponent:@"system.reg"] atomically:YES]);
+    assert(helper_identity(executable, info[@"CFBundleIdentifier"], search) == nil);
+    assert([[NSData data] writeToFile:[bottle stringByAppendingPathComponent:@"cxbottle.conf"] atomically:YES]);
+    NSDictionary *identity = helper_identity(executable, info[@"CFBundleIdentifier"], search);
+    assert([identity[@"bottle_path"] isEqual:verified_bottle_path(bottle)]);
+    assert([identity[@"identity_source"] isEqual:@"crossover_helper_bundle"]);
+    assert(helper_identity(executable, @"com.codeweavers.CrossOverHelper.WRONG", search) == nil);
+    assert(helper_identity(executable, @"com.codeweavers.CrossOver.wine", search) == nil);
+    assert(helper_identity([macos stringByAppendingPathComponent:@"Another Helper"], info[@"CFBundleIdentifier"], search) == nil);
+    // CrossOver would choose the first existing bottle. Do not select a later
+    // namesake if that first bottle fails our CrossOver configuration check.
+    NSString *earlier = [first stringByAppendingPathComponent:@"Example Bottle"];
+    assert([fm createDirectoryAtPath:earlier withIntermediateDirectories:YES attributes:nil error:NULL]);
+    assert([[NSData data] writeToFile:[earlier stringByAppendingPathComponent:@"system.reg"] atomically:YES]);
+    assert(helper_identity(executable, info[@"CFBundleIdentifier"], search) == nil);
+    assert([fm removeItemAtPath:root error:NULL]);
+}
+
 int main(void) {
     @autoreleasepool {
         test_control_wait();
         test_power_invalidation();
         test_parent_watch();
+        test_helper_identity();
         int argc = 2;
         const char args[] = "/path/wine\0\0game.exe\0--play\0\0\0UNRELATED=test\0WINEPREFIX=/bottles/Test\0SECRET=not-retained\0";
         NSMutableData *bytes = [NSMutableData dataWithBytes:&argc length:sizeof(argc)];
@@ -114,6 +156,18 @@ int main(void) {
         bytes = [NSMutableData dataWithBytes:&argc length:sizeof(argc)];
         [bytes appendBytes:truncated length:sizeof(truncated)-1];
         assert(wine_arguments(bytes) == nil);
+        int helper_argc = 1;
+        const char helper_args[] = "/Example.app/Contents/MacOS/Menu Helper\0\0/Example.app/Contents/MacOS/Menu Helper\0\0SECRET=excluded\0CX_BOTTLE_PATH=/bottles:/external/bottles\0UNRELATED=excluded\0";
+        bytes = [NSMutableData dataWithBytes:&helper_argc length:sizeof(helper_argc)];
+        [bytes appendBytes:helper_args length:sizeof(helper_args)];
+        identity = wine_arguments(bytes);
+        assert([identity[@"bottle_search_path"] isEqual:@"/bottles:/external/bottles"]);
+        assert(identity.count == 2 && identity[@"bottle_path"] == nil);
+        const char prefix[] = "WINEPREFIX=/explicit/bottle\0";
+        [bytes appendBytes:prefix length:sizeof(prefix)];
+        identity = wine_arguments(bytes);
+        assert([identity[@"bottle_path"] isEqual:@"/explicit/bottle"]);
+        assert(identity.count == 2 && identity[@"bottle_search_path"] == nil);
 
         NSArray *processes = @[
             @{@"audio_object":@101, @"running_output":@YES, @"bottle_path":@"/bottles/A", @"devices":@[@{@"id":@1}]},
