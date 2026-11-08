@@ -2,6 +2,8 @@
 
 [中文](#中文) · [日本語](#日本語) · [English](#english)
 
+[下载 DMG / DMG をダウンロード / Download DMG](https://github.com/frienkie/Crossover-Sleep-Audio-fix/releases/latest)
+
 ## 中文
 
 ### 这个软件解决什么问题？
@@ -14,8 +16,8 @@
 
 ### 怎么使用？
 
-1. 使用 **macOS 14.2 或更新版本**。
-2. 解压应用安装包，把 **Crossover Sleep-Audio-fix.app** 放进“应用程序”并打开。若只有源代码，请参阅[构建说明](docs/DEVELOPMENT.md)。
+1. 使用 **macOS 14.2 或更新版本**。本次发布的 DMG 适用于 **Apple Silicon（M 系列）Mac**。
+2. 打开下载的 DMG，把 **Crossover Sleep-Audio-fix.app** 拖入“应用程序”并打开。若只有源代码，请参阅[构建说明](docs/DEVELOPMENT.md)。
 3. 点击菜单栏的扬声器图标，开启“**跟随 macOS 音频输出**”。
 4. 首次提示时，允许“**系统音频录制**”。这是转发程序声音所需的权限；声音只在内存里处理，不保存、不上传。
 5. 在 macOS 的“系统设置 → 声音 → 输出”中选择你要用的音响，然后正常运行 CrossOver 程序即可。
@@ -54,8 +56,8 @@
 
 ### 使い方
 
-1. **macOS 14.2 以降**を使用してください。
-2. アプリの配布ファイルを解凍し、**Crossover Sleep-Audio-fix.app** を「アプリケーション」に移動して開きます。ソースコードしかない場合は、[ビルド手順](docs/DEVELOPMENT.md)を参照してください。
+1. **macOS 14.2 以降**を使用してください。今回の DMG は **Apple Silicon（M シリーズ）Mac** 用です。
+2. ダウンロードした DMG を開き、**Crossover Sleep-Audio-fix.app** を「アプリケーション」にドラッグして開きます。ソースコードしかない場合は、[ビルド手順](docs/DEVELOPMENT.md)を参照してください。
 3. メニューバーのスピーカーアイコンをクリックし、「**macOS の音声出力に追従**」をオンにします。
 4. 初回の確認で「**システムオーディオの収録**」を許可します。これはアプリの音声を転送するために必要な権限です。音声はメモリ内でのみ処理され、保存やアップロードはしません。
 5. macOS の「システム設定 → サウンド → 出力」で使用するスピーカーなどを選び、CrossOver アプリを通常どおり使います。
@@ -94,8 +96,8 @@ This tool keeps the audio output of running CrossOver programs following **the o
 
 ### How to use it
 
-1. Use **macOS 14.2 or later**.
-2. Unzip the app package, move **Crossover Sleep-Audio-fix.app** to Applications and open it. If you only have source code, see the [build guide](docs/DEVELOPMENT.md).
+1. Use **macOS 14.2 or later**. This DMG release is for **Apple Silicon (M-series) Macs**.
+2. Open the downloaded DMG, drag **Crossover Sleep-Audio-fix.app** into Applications and open it. If you only have source code, see the [build guide](docs/DEVELOPMENT.md).
 3. Click the speaker icon in the menu bar and enable **Follow macOS Audio Output**.
 4. Allow **System Audio Recording** when first prompted. This permission is needed to forward application audio. Audio is processed only in memory and is never saved or uploaded.
 5. Select the speakers or other output you want in macOS **System Settings → Sound → Output**, then use your CrossOver programs as usual.

@@ -44,3 +44,16 @@ The source package is crossover-sleep-audio-fix, with a SleepAudioFix menu binar
 and SleepAudioHelper native helper. PCM never crosses their control channel.
 Automated tests do not replace real-device playback and repeated sleep/wake
 checks. The existing audio engine and generated Menu Helper discovery are kept.
+
+## DMG release packaging
+
+```sh
+sh tools/build-dmg.sh v1.0
+```
+
+The script builds and signs a fresh app, packages the README and an Applications
+shortcut, and verifies the DMG. Output is under target/dmg, labelled with the
+build machine architecture. Existing DMG files are never overwritten.
+Local signing is not Developer ID signing or Apple notarization; release notes
+must describe the actual signing status. Build from the commit selected for the
+release tag, and publish the exact verified DMG bytes together with SHA256SUMS.
