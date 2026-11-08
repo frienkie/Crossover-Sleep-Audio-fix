@@ -44,77 +44,83 @@
 
 ## 日本語
 
-### 何を直すアプリですか？
+### このソフトはどのような問題を直しますか？
 
-**Mac のスリープ復帰後、CrossOver アプリの音が Mac の内蔵スピーカーに戻ってしまう問題を改善するツールです。**
+**Mac のスリープ復帰後、CrossOver アプリの音声出力が Mac の内蔵スピーカーに戻ってしまう問題を修正します。**
 
-たとえば、スリープ前はモニターのスピーカー、USB スピーカー、ヘッドホンでゲームの音を聞いていたのに、復帰後は Mac 本体から音が出る場合です。macOS で外部出力を選び直しても、CrossOver のゲームだけ切り替わらないことがあります。
+たとえば、スリープ前はモニターのスピーカー、USB スピーカー、ヘッドホンでゲームの音を聞いていたのに、復帰後は Mac 本体のスピーカーから音が出る場合です。macOS で外部スピーカーなどを選び直しても、CrossOver のゲームは出力先が切り替わらないことがあります。
 
-このツールは、実行中の CrossOver アプリの音を **macOS で現在選択している出力先**に追従させ、スリープ復帰時に接続を確認し、必要な音声転送を作り直します。実装の一部は CrossPuck から着想を得ています。
+このツールは、実行中の CrossOver アプリの音声出力を **macOS で現在選択している出力先**に追従させ、スリープ復帰後に再確認し、必要な音声転送を復旧します。外部スピーカー、モニターのスピーカー、ヘッドホンなどの出力切り替えに対応するためのツールです。実装の一部は CrossPuck から着想を得ています。
 
 ### 使い方
 
-1. **macOS 14.2 以降**が必要です。
-2. アプリの配布ファイルを解凍し、**Crossover Sleep-Audio-fix.app** を「アプリケーション」に移動して開きます。ソースコードからの作成方法は[こちら](docs/DEVELOPMENT.md)。
-3. メニューバーのスピーカーアイコンから「**macOS の音声出力に追従**」をオンにします。
-4. 初回の確認で「**システムオーディオの収録**」を許可します。音声転送に必要な権限です。音声はメモリ内でのみ処理され、保存やアップロードはしません。
-5. macOS の「システム設定 → サウンド → 出力」で使用する機器を選び、CrossOver アプリを通常どおり使います。
+1. **macOS 14.2 以降**を使用してください。
+2. アプリの配布ファイルを解凍し、**Crossover Sleep-Audio-fix.app** を「アプリケーション」に移動して開きます。ソースコードしかない場合は、[ビルド手順](docs/DEVELOPMENT.md)を参照してください。
+3. メニューバーのスピーカーアイコンをクリックし、「**macOS の音声出力に追従**」をオンにします。
+4. 初回の確認で「**システムオーディオの収録**」を許可します。これはアプリの音声を転送するために必要な権限です。音声はメモリ内でのみ処理され、保存やアップロードはしません。
+5. macOS の「システム設定 → サウンド → 出力」で使用するスピーカーなどを選び、CrossOver アプリを通常どおり使います。
 
-「**言語**」から日本語・中国語・英語を選べます。設定は次回も保持されます。旧版から移行する場合は、先に CrossPuck を終了し、2 つのバージョンを同時に起動しないでください。
+「**言語**」メニューで中国語・日本語・英語を切り替えられます。選択は次回も保持されます。旧版から移行する場合は、先に CrossPuck を終了してから新しい名前のアプリを使い、2 つのバージョンが同時に起動しないようにしてください。
 
-### 表示の意味
+### メニューの表示は何を意味しますか？
 
-| 表示 | 意味 |
+| 表示 | わかりやすい説明 |
 | --- | --- |
-| **監視中 · 出力先** | 出力の変化を確認しています。アプリがすでに正しい機器から再生している場合も、この正常な状態になります。 |
-| **転送中 · 出力先** | 別の機器に向いているアプリの音を、この出力先へ転送しています。 |
-| **接続中／再試行中** | 接続を復旧しています。長く続く場合は音声収録の権限と機器の接続を確認してください。 |
+| **監視中 · 出力先** | 出力の変化を確認しています。アプリがすでに正しいスピーカーなどから再生している場合は正常な状態で、追加の音声転送は不要です。 |
+| **転送中 · 出力先** | アプリがまだ別の機器を使用していることを検出し、音声をこの出力先へ転送しています。 |
+| **接続中／再試行中** | 接続を復旧しています。長く続く場合は、音声収録の権限と機器の接続を確認してください。 |
 
-### よくある問題 / Issue
+### 元の CrossPuck をベースに修正した問題
 
-- **対応した症状：**macOS は外部出力なのに CrossOver だけ内蔵スピーカーから鳴る。復帰後に必要な音声転送を作り直します。
-- **対応した起動方法：**CrossOver が作成したデスクトップのショートカットから起動したアプリも識別します。
-- **先に確認すること：**macOS 自体の出力先が内蔵スピーカーの場合は、外部機器を選び直してください。このツールは特定のスピーカーを選ぶのではなく、システムの選択に追従します。
-- **機器が見つからない／改善しない：**まず macOS から使用できるか確認してください。機器やアプリによって相性の問題が残る場合があります。
+- **修正済みの症状**：システムで外部スピーカーなどを選択しているのに、CrossOver の音は Mac のスピーカーから出る問題です。スリープ復帰後に再確認し、必要な音声転送を作成します。
+- **修正済みの識別問題**：CrossOver が作成したデスクトップのショートカットから起動したアプリも識別できるようになりました。
 
-問題は [Issues](https://github.com/frienkie/Crossover-Sleep-Audio-fix/issues/new/choose) に日本語・中国語・英語で報告できます。Mac/macOS と CrossOver のバージョン、音響機器、復帰前後の音の出る場所、メニューの表示を教えてください。プログラミングの知識は不要です。
+### トラブルシューティング
+
+- **システムのデフォルト出力先を確認してください**：macOS 自体の出力先がまだ Mac のスピーカーになっている場合は、先に外部機器を選び直してください。このツールはシステムの選択に追従するもので、特定のスピーカーを代わりに選ぶものではありません。
+- **機器が接続されていない、または問題が続く場合**：まず、その機器が macOS から使用できるか確認してください。機器やアプリによって互換性に違いがある場合があります。
+
+[Issues](https://github.com/frienkie/Crossover-Sleep-Audio-fix/issues/new/choose) に中国語・日本語・英語で報告できます。Mac/macOS と CrossOver のバージョン、音響機器の種類、スリープ復帰前後にどこから音が出るか、メニューに何が表示されるかを教えてください。プログラミングの知識は不要です。
 
 ## English
 
-### What problem does this fix?
+### What problem does this software fix?
 
-**This utility addresses CrossOver audio switching back to the Mac's built-in speakers after waking from sleep.**
+**It fixes CrossOver audio switching back to the Mac's built-in speakers after the Mac wakes from sleep.**
 
-For example, your game plays through monitor speakers, USB speakers or headphones before sleep, but through the Mac itself after wake. Selecting the external output again in macOS may still leave the CrossOver game playing through the built-in speakers.
+For example, you play a game through monitor speakers, USB speakers or headphones before sleep, but after wake the sound comes from the Mac's built-in speakers. Even after you select the external output again in macOS, the CrossOver game may still fail to switch with it.
 
-The app keeps running CrossOver programs following **the output currently selected in macOS**. After wake, it checks the connection and rebuilds audio forwarding when needed. Parts of the implementation are inspired by CrossPuck.
+This tool keeps the audio output of running CrossOver programs following **the output currently selected in macOS**. After wake, it rechecks and restores audio forwarding when needed. It is intended for switching between external speakers, monitor speakers, headphones and similar outputs. Parts of the implementation are inspired by CrossPuck.
 
 ### How to use it
 
 1. Use **macOS 14.2 or later**.
 2. Unzip the app package, move **Crossover Sleep-Audio-fix.app** to Applications and open it. If you only have source code, see the [build guide](docs/DEVELOPMENT.md).
 3. Click the speaker icon in the menu bar and enable **Follow macOS Audio Output**.
-4. Allow **System Audio Recording** when prompted. This permission is needed to forward application audio. Audio stays in memory and is never saved or uploaded.
-5. Select your speakers in macOS **System Settings → Sound → Output**, then use your CrossOver programs as usual.
+4. Allow **System Audio Recording** when first prompted. This permission is needed to forward application audio. Audio is processed only in memory and is never saved or uploaded.
+5. Select the speakers or other output you want in macOS **System Settings → Sound → Output**, then use your CrossOver programs as usual.
 
-Use **Language** to switch between English, Chinese and Japanese. Your choice is remembered. When upgrading, quit the older CrossPuck app before opening the renamed app so that two versions do not run together.
+Use the **Language** menu to switch between Chinese, Japanese and English. Your choice is remembered. When upgrading, quit CrossPuck before using the app under its new name to avoid running two versions at the same time.
 
-### What do the status messages mean?
+### What do the menu status messages mean?
 
 | Status | Plain-language meaning |
 | --- | --- |
-| **Monitoring · Output** | Watching for output changes. This is also normal when your program already plays through the right device and needs no forwarding. |
-| **Rerouting · Output** | Forwarding a program's audio from a different device to this output. |
-| **Connecting / Retrying** | Recovering the connection. If this persists, check audio permission and the device connection. |
+| **Monitoring · Output** | Watching for output changes. When your program already plays through the correct device, this is normal and no additional forwarding is needed. |
+| **Rerouting · Output** | The tool has detected that a program is still using another device and is forwarding its audio to this output. |
+| **Connecting / Retrying** | Recovering the connection. If this persists, check audio recording permission and the device connection. |
 
-### Common problems / Issues
+### Problems fixed on top of the original CrossPuck
 
-- **Addressed symptom:** macOS selects an external output, but CrossOver still plays through the Mac speakers. The utility rechecks and rebuilds forwarding after wake when needed.
-- **Addressed discovery problem:** apps launched through CrossOver-generated desktop shortcuts are recognized too.
-- **Check first:** if macOS itself still selects the built-in speakers, choose your external device. This app follows the system selection; it does not pick a particular speaker for you.
-- **Missing device or continuing trouble:** check that macOS can use the device. Compatibility can still vary by device and application.
+- **Fixed playback scenario**: the system selects an external output, but CrossOver still plays through the Mac speakers. After wake, the tool rechecks and sets up forwarding when needed.
+- **Fixed application detection**: programs launched through CrossOver-generated desktop shortcuts can now be recognized too.
 
-Report problems in English, Chinese or Japanese through [Issues](https://github.com/frienkie/Crossover-Sleep-Audio-fix/issues/new/choose). Include your Mac/macOS and CrossOver versions, speaker connection type, where audio plays before and after wake, and the menu status. No coding knowledge is needed.
+### Troubleshooting
+
+- **Check the system's default audio output**: if macOS itself still selects the Mac speakers, first switch back to your external device. This tool follows the system's selection; it does not choose a particular speaker for you.
+- **Device disconnected or problems persist**: first check that the audio device is available in macOS. Compatibility can still vary between devices and programs.
+
+Report problems in Chinese, Japanese or English through [Issues](https://github.com/frienkie/Crossover-Sleep-Audio-fix/issues/new/choose). Include your Mac/macOS and CrossOver versions, audio device type, where the sound comes from before and after wake, and what the menu displays. No coding knowledge is needed.
 
 ---
 
