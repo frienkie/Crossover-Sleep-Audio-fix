@@ -6,5 +6,5 @@ fn main() {
         .flag("-std=gnu11")
         .flag("-mmacosx-version-min=14.2")
         .warnings_into_errors(true)
-        .compile("crosspuck_logging");
+        .compile("sleep_audio_logging");
 }

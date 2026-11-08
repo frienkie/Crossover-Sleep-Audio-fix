@@ -2,7 +2,7 @@
 #include <os/log.h>
 #include <stdint.h>
 
-void crosspuck_audio_log(uint8_t level, const char *message) {
+void sleep_audio_log(uint8_t level, const char *message) {
     static os_log_t logger;
     static dispatch_once_t once;
     dispatch_once(&once, ^{ logger = os_log_create("com.github.scryner.crosspuck", "audio"); });

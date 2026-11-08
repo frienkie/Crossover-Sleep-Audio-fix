@@ -34,8 +34,10 @@ impl Status {
             Self::Connecting(output) => format!("Connecting to {output} — check audio permission"),
             Self::Routing { output, .. } => format!("Rerouting to {output}"),
             Self::Retrying => "Unavailable — retrying; check audio permission".into(),
-            Self::AnotherInstance => "Handled by another CrossPuck".into(),
-            Self::MissingHelper => "Helper unavailable — rebuild or reinstall CrossPuck".into(),
+            Self::AnotherInstance => "Handled by another Crossover Sleep-Audio-fix".into(),
+            Self::MissingHelper => {
+                "Helper unavailable — rebuild or reinstall Crossover Sleep-Audio-fix".into()
+            }
         };
         format!("Audio: {text}")
     }
@@ -95,7 +97,7 @@ impl AudioService {
         {
             let worker_state = Arc::clone(&shared);
             match thread::Builder::new()
-                .name("crosspuck-audio".into())
+                .name("sleep-audio".into())
                 .spawn(move || supervise(worker_state))
             {
                 Ok(worker) => *owner.worker.lock().unwrap() = Some(worker),
@@ -179,7 +181,7 @@ fn helper_path() -> std::io::Result<PathBuf> {
     Ok(executable
         .parent()
         .unwrap_or(Path::new("."))
-        .join("CrossPuckAudio"))
+        .join("SleepAudioHelper"))
 }
 
 fn retry_delay(failures: u32) -> Duration {

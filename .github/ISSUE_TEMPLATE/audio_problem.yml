@@ -1,0 +1,43 @@
+name: "音频问题 / 音声の問題 / Audio problem"
+description: "睡眠唤醒或音频切换 / スリープ復帰・音声切替 / Sleep/wake or output switching"
+title: "[Audio] "
+body:
+  - type: markdown
+    attributes:
+      value: "请用中文、日文或英文描述即可，无需懂代码。日本語・中国語・英語で報告できます。No coding knowledge is needed."
+  - type: input
+    id: versions
+    attributes:
+      label: "Mac、macOS、CrossOver 版本 / バージョン / Versions"
+      placeholder: "Mac mini M4, macOS 27.2, CrossOver 26"
+    validations:
+      required: true
+  - type: dropdown
+    id: connection
+    attributes:
+      label: "音响连接 / 接続方法 / Audio connection"
+      options:
+        - "HDMI / DisplayPort 显示器・モニター・Monitor"
+        - "USB 音箱或声卡・スピーカー／DAC・Speakers/DAC"
+        - "Bluetooth 蓝牙・Bluetooth・Bluetooth"
+        - "3.5 mm 耳机孔・イヤホン端子・Audio jack"
+        - "其他・その他・Other"
+    validations:
+      required: true
+  - type: textarea
+    id: symptom
+    attributes:
+      label: "发生了什么 / 何が起きましたか / What happened?"
+      description: "说明睡眠前后从哪里发声，以及 macOS 当前选择的输出。復帰前後の出力先と macOS の設定。Audio output before/after sleep and the output selected in macOS."
+    validations:
+      required: true
+  - type: input
+    id: menu
+    attributes:
+      label: "菜单状态 / メニューの表示 / Menu status"
+      placeholder: "监控中 · LG / 転送中 · USB / Rerouting · Headphones"
+  - type: textarea
+    id: steps
+    attributes:
+      label: "如何重现 / 再現手順 / Steps to reproduce"
+      description: "例如：打开游戏→睡眠→唤醒。例：ゲーム起動→スリープ→復帰。Example: open game → sleep → wake."

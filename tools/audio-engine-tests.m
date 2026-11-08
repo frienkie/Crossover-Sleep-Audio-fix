@@ -1,5 +1,5 @@
 // Pure engine regression tests: no HAL objects, permission prompts or audio IO.
-#include "../crates/crosspuck-app/src/audio/router.m"
+#include "../crates/crossover-sleep-audio-fix/src/audio/router.m"
 #include <assert.h>
 
 static void *notify_output_later(void *unused) {

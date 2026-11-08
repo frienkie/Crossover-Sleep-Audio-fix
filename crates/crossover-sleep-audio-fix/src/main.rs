@@ -121,7 +121,7 @@ impl Controller {
 
 fn main() {
     logging::init();
-    let mtm = MainThreadMarker::new().expect("CrossPuck must run on the main thread");
+    let mtm = MainThreadMarker::new().expect("SleepAudioFix must run on the main thread");
     // SAFETY: AppKit setup and the application event loop stay on the main thread.
     unsafe {
         let _pool = NSAutoreleasePool::new();
@@ -193,7 +193,7 @@ fn main() {
         if let Some(button) = status_item.button(mtm) {
             if let Some(image) = NSImage::imageWithSystemSymbolName_accessibilityDescription(
                 &NSString::from_str("speaker.wave.2.fill"),
-                Some(&NSString::from_str("CrossPuck Audio")),
+                Some(&NSString::from_str("Crossover Sleep-Audio-fix")),
             ) {
                 image.setTemplate(true);
                 button.setImage(Some(&image));
@@ -203,7 +203,7 @@ fn main() {
         }
         status_item.setMenu(Some(&menu));
         log::info!(
-            "CrossPuck audio-only app started; language={}",
+            "Crossover Sleep-Audio-fix started; language={}",
             language.code()
         );
         app.run();

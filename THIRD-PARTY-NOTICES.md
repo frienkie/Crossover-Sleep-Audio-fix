@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-CrossPuck Audio is distributed under Apache-2.0; see LICENSE. The following
+Crossover Sleep-Audio-fix is distributed under Apache-2.0; see LICENSE. The following
 Rust dependencies are declared by the locked audio-only build. Apple system
 frameworks are provided by macOS and are not bundled. No third-party update
 framework or controller library is included.

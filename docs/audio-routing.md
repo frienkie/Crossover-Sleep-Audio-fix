@@ -1,6 +1,6 @@
 # Audio routing and recovery
 
-The menu starts a supervised CrossPuckAudio child process. Core Audio calls,
+The menu starts a supervised SleepAudioHelper child process. Core Audio calls,
 permission waits and PCM processing stay in that helper. Its stdin pipe ties
 its lifetime to the menu app. Quit, disable, a crash or a watchdog timeout
 releases the private tap, restoring the original application output. Retrying
@@ -35,7 +35,7 @@ not measure audible speaker output.
 
 ## Read-only inventory
 
-`CrossPuckAudio --list` includes all Core Audio clients except itself. Process
+`SleepAudioHelper --list` includes all Core Audio clients except itself. Process
 arguments retain only the command name and WINEPREFIX or CX_BOTTLE_PATH;
 unrelated environment values are discarded. Nothing is uploaded.
 

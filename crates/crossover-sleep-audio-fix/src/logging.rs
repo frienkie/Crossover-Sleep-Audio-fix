@@ -5,7 +5,7 @@ struct Logger;
 static LOGGER: Logger = Logger;
 
 unsafe extern "C" {
-    fn crosspuck_audio_log(level: u8, message: *const std::ffi::c_char);
+    fn sleep_audio_log(level: u8, message: *const std::ffi::c_char);
 }
 
 impl log::Log for Logger {
@@ -17,7 +17,7 @@ impl log::Log for Logger {
         if self.enabled(record.metadata()) {
             if let Ok(message) = CString::new(record.args().to_string()) {
                 // SAFETY: The native function uses this string only during the call.
-                unsafe { crosspuck_audio_log(record.level() as u8, message.as_ptr()) };
+                unsafe { sleep_audio_log(record.level() as u8, message.as_ptr()) };
             }
         }
     }
@@ -26,7 +26,8 @@ impl log::Log for Logger {
 }
 
 pub fn init() {
-    let level = std::env::var("CROSSPUCK_LOG_LEVEL")
+    let level = std::env::var("SLEEP_AUDIO_FIX_LOG_LEVEL")
+        .or_else(|_| std::env::var("CROSSPUCK_LOG_LEVEL"))
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(log::LevelFilter::Info);

@@ -19,8 +19,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "crosspuck-app"
-version = "0.6.0"
+name = "crossover-sleep-audio-fix"
+version = "0.6.1"
 dependencies = [
  "cc",
  "log",

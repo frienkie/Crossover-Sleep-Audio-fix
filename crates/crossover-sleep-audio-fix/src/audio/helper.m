@@ -2,9 +2,9 @@
 #include <stdbool.h>
 #include <string.h>
 
-extern int crosspuck_audio_main(bool list_only);
+extern int sleep_audio_main(bool list_only);
 
 int main(int argc, char **argv) {
     if (argc > 2 || (argc == 2 && strcmp(argv[1], "--list"))) return 2;
-    return crosspuck_audio_main(argc == 2);
+    return sleep_audio_main(argc == 2);
 }

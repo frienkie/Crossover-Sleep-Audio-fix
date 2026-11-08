@@ -94,9 +94,9 @@ impl Language {
                 "再試行中 — 音声収録の許可を確認",
             ),
             Status::AnotherInstance => self.text(
-                "Handled by another CrossPuck",
-                "另一个 CrossPuck 正在处理音频",
-                "別の CrossPuck が音声を処理中",
+                "Handled by another Crossover Sleep-Audio-fix",
+                "另一个 Crossover Sleep-Audio-fix 正在处理音频",
+                "別の Crossover Sleep-Audio-fix が音声を処理中",
             ),
             Status::MissingHelper => self.text(
                 "Audio helper missing — reinstall",

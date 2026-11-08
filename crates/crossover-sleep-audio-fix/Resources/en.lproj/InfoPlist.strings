@@ -1,0 +1,2 @@
+"CFBundleDisplayName" = "Crossover Sleep-Audio-fix";
+"NSAudioCaptureUsageDescription" = "Crossover Sleep-Audio-fix follows the macOS audio output for CrossOver programs. Audio stays in memory and is never saved or uploaded.";

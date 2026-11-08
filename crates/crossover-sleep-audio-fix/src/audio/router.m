@@ -1,4 +1,4 @@
-// CrossOver-only routing engine. Runs in the supervised CrossPuckAudio helper.
+// CrossOver-only routing engine. Runs in the supervised SleepAudioHelper helper.
 #import <Foundation/Foundation.h>
 #import <AppKit/NSWorkspace.h>
 #import <CoreAudio/CoreAudio.h>
@@ -525,7 +525,7 @@ static int route_once(void) {
         if (!output || !isfinite(rate) || rate < 8000) return RouteFailed;
         state(@"connecting", output, targets.count);
         CATapDescription *description = [[CATapDescription alloc] initStereoMixdownOfProcesses:targets];
-        description.name = @"CrossPuck Audio";
+        description.name = @"Crossover Sleep-Audio-fix";
         description.privateTap = YES;
         description.muteBehavior = CATapMutedWhenTapped;
         AudioObjectID tap = 0, aggregate = 0;
@@ -548,7 +548,7 @@ static int route_once(void) {
             NSString *uid = string_property(output, kAudioDevicePropertyDeviceUID);
             if (!uid) goto cleanup;
             NSDictionary *spec = @{
-                @kAudioAggregateDeviceNameKey:@"CrossPuck Audio",
+                @kAudioAggregateDeviceNameKey:@"Crossover Sleep-Audio-fix",
                 @kAudioAggregateDeviceUIDKey:NSUUID.UUID.UUIDString,
                 @kAudioAggregateDeviceIsPrivateKey:@YES,
                 @kAudioAggregateDeviceIsStackedKey:@NO,
@@ -653,7 +653,7 @@ static void wait_for_change(double seconds, BOOL scan_targets) {
     }
 }
 
-// A per-user lease prevents two copies of CrossPuck from muting/routing the
+// A per-user lease prevents two copies of this app from muting/routing the
 // same clients. The OS releases this lock on graceful exit or a crash.
 static int acquire_lease(void) {
     char directory[PATH_MAX];
@@ -739,7 +739,7 @@ static void finish_parent_watch(pthread_t watcher) {
     shutdown_pipe[0] = shutdown_pipe[1] = -1;
 }
 
-int crosspuck_audio_main(bool list_only) {
+int sleep_audio_main(bool list_only) {
     @autoreleasepool {
         if (list_only) {
             AudioDeviceID output = default_output();

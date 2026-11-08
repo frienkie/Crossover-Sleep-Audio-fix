@@ -5,9 +5,9 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>CrossPuck Audio</string>
+	<string>Crossover Sleep-Audio-fix</string>
 	<key>CFBundleExecutable</key>
-	<string>CrossPuck</string>
+	<string>SleepAudioFix</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.github.scryner.crosspuck</string>
 	<key>CFBundleLocalizations</key>
@@ -17,18 +17,18 @@
 		<string>ja</string>
 	</array>
 	<key>CFBundleName</key>
-	<string>CrossPuck Audio</string>
+	<string>Crossover Sleep-Audio-fix</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.6.0</string>
+	<string>0.6.1</string>
 	<key>CFBundleVersion</key>
-	<string>0.6.0</string>
+	<string>0.6.1</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.2</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAudioCaptureUsageDescription</key>
-	<string>CrossPuck follows the macOS audio output for CrossOver programs. Audio stays in memory and is never saved or uploaded.</string>
+	<string>Crossover Sleep-Audio-fix follows the macOS audio output for CrossOver programs. Audio stays in memory and is never saved or uploaded.</string>
 </dict>
 </plist>
