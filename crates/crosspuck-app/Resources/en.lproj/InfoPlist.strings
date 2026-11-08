@@ -1,0 +1,2 @@
+"CFBundleDisplayName" = "CrossPuck Audio";
+"NSAudioCaptureUsageDescription" = "CrossPuck follows the macOS audio output for CrossOver programs. Audio stays in memory and is never saved or uploaded.";

@@ -1,0 +1,2 @@
+"CFBundleDisplayName" = "CrossPuck Audio";
+"NSAudioCaptureUsageDescription" = "CrossPuck 让 CrossOver 程序的声音跟随 macOS 音频输出。音频仅在内存中处理，不会保存或上传。";

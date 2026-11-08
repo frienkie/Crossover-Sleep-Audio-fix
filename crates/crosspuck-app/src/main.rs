@@ -1,1257 +1,215 @@
-use std::process::ExitCode;
-
-#[cfg(target_os = "macos")]
+//! Audio-only menu bar shell. No UI timer, device scanner, socket server or updater.
 mod audio;
-#[cfg(target_os = "macos")]
-mod bottle_config;
-#[cfg(target_os = "macos")]
-mod bundle;
-#[cfg(target_os = "macos")]
-mod driver_install;
-#[cfg(target_os = "macos")]
-mod hid_backend;
-#[cfg(target_os = "macos")]
+mod localization;
 mod logging;
-#[cfg(all(target_os = "macos", feature = "profiling"))]
-mod probe;
-#[cfg(all(target_os = "macos", not(feature = "profiling")))]
-mod probe {
-    pub(crate) fn start_from_env() {}
-    pub(crate) fn note_ui_timer_tick() {}
-    pub(crate) fn note_menu_will_open() {}
-    pub(crate) fn note_menu_refresh() {}
-    pub(crate) fn note_driver_status_check() {}
-    pub(crate) fn note_control_frame() {}
-    pub(crate) fn note_input_report() {}
-    pub(crate) fn note_hid_open_path_attempt() {}
-    pub(crate) fn note_hid_interface_reopen_attempt() {}
-    pub(crate) fn note_hid_interface_reopen_ok() {}
-    pub(crate) fn note_hid_error_reopen_attempt() {}
-    pub(crate) fn note_hid_error_reopen_ok() {}
-    pub(crate) fn note_hid_main_refresh_attempt() {}
-    pub(crate) fn note_hid_main_refresh_ok() {}
 
-    pub(crate) fn with_callback_autorelease_pool<T>(body: impl FnOnce() -> T) -> T {
-        body()
-    }
-}
-#[cfg(target_os = "macos")]
-mod runtime;
-#[cfg(target_os = "macos")]
-mod settings;
-#[cfg(target_os = "macos")]
-mod updates;
-#[cfg(target_os = "macos")]
-mod user_activity;
+use audio::AudioService;
+use localization::Language;
+use objc2::rc::Retained;
+use objc2::runtime::{AnyObject, ProtocolObject};
+use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadMarker, MainThreadOnly};
+use objc2_app_kit::{
+    NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSControlStateValueOff,
+    NSControlStateValueOn, NSImage, NSMenu, NSMenuDelegate, NSMenuItem, NSSquareStatusItemLength,
+    NSStatusBar,
+};
+use objc2_foundation::{
+    NSAutoreleasePool, NSLocale, NSNotification, NSObject, NSObjectProtocol, NSString,
+    NSUserDefaults,
+};
+use std::cell::Cell;
 
-#[cfg(target_os = "macos")]
-fn main() -> ExitCode {
-    macos::run()
+const FOLLOW_KEY: &str = "FollowAudioOutput";
+const LANGUAGE_KEY: &str = "MenuLanguage";
+
+struct ControllerIvars {
+    audio: AudioService,
+    language: Cell<Language>,
+    follow: Retained<NSMenuItem>,
+    status: Retained<NSMenuItem>,
+    language_menu: Retained<NSMenuItem>,
+    languages: Vec<Retained<NSMenuItem>>,
+    quit: Retained<NSMenuItem>,
 }
 
-#[cfg(not(target_os = "macos"))]
-fn main() -> ExitCode {
-    log::error!("crosspuck-app is only supported on macOS.");
-    ExitCode::from(1)
-}
+define_class!(
+    #[unsafe(super = NSObject)]
+    #[thread_kind = objc2::MainThreadOnly]
+    #[ivars = ControllerIvars]
+    struct Controller;
 
-#[cfg(target_os = "macos")]
-mod macos {
-    use crate::audio::AudioService;
-    use crate::bottle_config::{duplicate_xinput_hidden, set_duplicate_xinput_hidden};
-    use crate::driver_install::{
-        check_driver_install_status, discover_bottle, find_steam_dir, install_driver,
-        uninstall_driver, DriverInstallContext, DriverInstallState, DriverInstallStatus,
-    };
-    use crate::runtime::{
-        start_host_service_with_config, AppState, HostServiceConfig, HostServiceHandle,
-    };
-    use crate::updates::UpdateMenuController;
-    use objc2::rc::Retained;
-    use objc2::runtime::{AnyObject, ProtocolObject};
-    use objc2::{
-        define_class, msg_send, sel, AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly,
-    };
-    use objc2_app_kit::{
-        NSAlert, NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate,
-        NSCellImagePosition, NSControlStateValueMixed, NSControlStateValueOff,
-        NSControlStateValueOn, NSImage, NSImageScaling, NSMenu, NSMenuDelegate, NSMenuItem,
-        NSModalResponseOK, NSOpenPanel, NSSquareStatusItemLength, NSStatusBar, NSStatusItem,
-    };
-    use objc2_foundation::{
-        NSAutoreleasePool, NSBundle, NSNotification, NSObject, NSObjectProtocol, NSString, NSTimer,
-        NSURL,
-    };
-    use std::path::{Path, PathBuf};
-    use std::process::ExitCode;
-    use std::sync::{Arc, Mutex};
-    use std::thread;
+    unsafe impl NSObjectProtocol for Controller {}
 
-    struct MenuBarObjects {
-        _status_item: Retained<NSStatusItem>,
-        _icon: Option<Retained<NSImage>>,
-        _menu: Retained<NSMenu>,
-        _state_items: StateMenuItems,
-        _menu_delegate: Retained<StateMenuDelegate>,
-        _refresh_timer: Retained<NSTimer>,
-        _driver_controller: Retained<DriverInstallController>,
-        _bottle_controller: Retained<BottleController>,
-        _reconnect_controller: Retained<ReconnectController>,
-        _quit_controller: Retained<QuitController>,
-        _audio_controller: Retained<AudioController>,
-        _updates: Retained<UpdateMenuController>,
-        _app_delegate: Retained<AppDelegate>,
+    unsafe impl NSApplicationDelegate for Controller {
+        #[unsafe(method(applicationWillTerminate:))]
+        fn application_will_terminate(&self, _notification: &NSNotification) {
+            self.ivars().audio.shutdown();
+        }
     }
 
-    #[derive(Clone)]
-    struct StateMenuItems {
-        status: Retained<NSMenuItem>,
-        puck: Retained<NSMenuItem>,
-        guest: Retained<NSMenuItem>,
-        error: Retained<NSMenuItem>,
-        driver_status: Retained<NSMenuItem>,
-        driver_action: Retained<NSMenuItem>,
-        driver_uninstall: Retained<NSMenuItem>,
-        bottle_info: Retained<NSMenuItem>,
-        bottle_choose: Retained<NSMenuItem>,
-        bottle_reset: Retained<NSMenuItem>,
-        audio_enabled: Retained<NSMenuItem>,
-        audio_status: Retained<NSMenuItem>,
-        audio_service: AudioService,
-        duplicate_xinput: Retained<NSMenuItem>,
+    unsafe impl NSMenuDelegate for Controller {
+        #[unsafe(method(menuWillOpen:))]
+        fn menu_will_open(&self, _menu: &NSMenu) {
+            self.refresh();
+        }
     }
 
-    #[derive(Clone)]
-    struct StateMenuDelegateIvars {
-        app_state: AppState,
-        driver_state: Arc<DriverMenuState>,
-        items: StateMenuItems,
-        updates: Retained<UpdateMenuController>,
-    }
+    impl Controller {
+        #[unsafe(method(toggleFollow:))]
+        fn toggle_follow(&self, _sender: Option<&AnyObject>) {
+            let enabled = !self.ivars().audio.enabled();
+            NSUserDefaults::standardUserDefaults().setBool_forKey(enabled, &NSString::from_str(FOLLOW_KEY));
+            self.ivars().audio.set_enabled(enabled);
+            self.refresh();
+        }
 
-    define_class!(
-        #[unsafe(super = NSObject)]
-        #[thread_kind = objc2::MainThreadOnly]
-        #[ivars = StateMenuDelegateIvars]
-        struct StateMenuDelegate;
-
-        unsafe impl NSObjectProtocol for StateMenuDelegate {}
-
-        unsafe impl NSMenuDelegate for StateMenuDelegate {
-            #[unsafe(method(menuWillOpen:))]
-            fn menu_will_open(&self, _menu: &NSMenu) {
-                crate::probe::note_menu_will_open();
-                let refresh = || {
-                    self.ivars().updates.refresh();
-                    self.ivars().driver_state.refresh_status();
-                    refresh_state_items(
-                        &self.ivars().app_state,
-                        &self.ivars().driver_state,
-                        &self.ivars().items,
+        #[unsafe(method(selectLanguage:))]
+        fn select_language(&self, sender: &NSMenuItem) {
+            if let Some(language) = Language::ALL.get(sender.tag() as usize).copied() {
+                self.ivars().language.set(language);
+                // SAFETY: The value is an NSString, a valid property-list object.
+                unsafe {
+                    NSUserDefaults::standardUserDefaults().setObject_forKey(
+                        Some(&NSString::from_str(language.code())), &NSString::from_str(LANGUAGE_KEY),
                     );
-                    refresh_duplicate_xinput_item(
-                        &self.ivars().driver_state,
-                        &self.ivars().items,
-                    );
-                };
-                crate::probe::with_callback_autorelease_pool(refresh);
-            }
-        }
-
-        impl StateMenuDelegate {
-            #[unsafe(method(refreshTimer:))]
-            fn refresh_timer(&self, _timer: &NSTimer) {
-                crate::probe::note_ui_timer_tick();
-                let refresh = || {
-                    self.ivars().updates.refresh();
-                    refresh_state_items(
-                        &self.ivars().app_state,
-                        &self.ivars().driver_state,
-                        &self.ivars().items,
-                    );
-                };
-                crate::probe::with_callback_autorelease_pool(refresh);
-            }
-        }
-    );
-
-    impl StateMenuDelegate {
-        fn new(
-            mtm: MainThreadMarker,
-            app_state: AppState,
-            driver_state: Arc<DriverMenuState>,
-            items: StateMenuItems,
-            updates: Retained<UpdateMenuController>,
-        ) -> Retained<Self> {
-            let this = Self::alloc(mtm).set_ivars(StateMenuDelegateIvars {
-                app_state,
-                driver_state,
-                items,
-                updates,
-            });
-            unsafe { msg_send![super(this), init] }
-        }
-    }
-
-    struct DriverInstallControllerIvars {
-        driver_state: Arc<DriverMenuState>,
-        items: StateMenuItems,
-    }
-
-    define_class!(
-        #[unsafe(super = NSObject)]
-        #[thread_kind = objc2::MainThreadOnly]
-        #[ivars = DriverInstallControllerIvars]
-        struct DriverInstallController;
-
-        unsafe impl NSObjectProtocol for DriverInstallController {}
-
-        impl DriverInstallController {
-            #[unsafe(method(validateMenuItem:))]
-            fn validate_menu_item(&self, item: &NSMenuItem) -> bool {
-                refresh_driver_items(&self.ivars().driver_state, &self.ivars().items);
-                let view = self.ivars().driver_state.menu_view();
-                match item.action() {
-                    Some(action) if action == sel!(installDriver:) => view.install_enabled,
-                    Some(action) if action == sel!(uninstallDriver:) => view.uninstall_enabled,
-                    _ => true,
                 }
-            }
-
-            #[unsafe(method(installDriver:))]
-            fn install_driver(&self, _sender: Option<&AnyObject>) {
-                if self.ivars().driver_state.start_install() {
-                    refresh_driver_items(&self.ivars().driver_state, &self.ivars().items);
-                }
-            }
-
-            #[unsafe(method(uninstallDriver:))]
-            fn uninstall_driver(&self, _sender: Option<&AnyObject>) {
-                if self.ivars().driver_state.start_uninstall() {
-                    refresh_driver_items(&self.ivars().driver_state, &self.ivars().items);
-                }
-            }
-        }
-    );
-
-    impl DriverInstallController {
-        fn new(
-            mtm: MainThreadMarker,
-            driver_state: Arc<DriverMenuState>,
-            items: StateMenuItems,
-        ) -> Retained<Self> {
-            let this = Self::alloc(mtm).set_ivars(DriverInstallControllerIvars {
-                driver_state,
-                items,
-            });
-            unsafe { msg_send![super(this), init] }
-        }
-    }
-
-    struct BottleControllerIvars {
-        driver_state: Arc<DriverMenuState>,
-        items: StateMenuItems,
-    }
-
-    define_class!(
-        #[unsafe(super = NSObject)]
-        #[thread_kind = objc2::MainThreadOnly]
-        #[ivars = BottleControllerIvars]
-        struct BottleController;
-
-        unsafe impl NSObjectProtocol for BottleController {}
-
-        impl BottleController {
-            #[unsafe(method(chooseBottle:))]
-            fn choose_bottle(&self, _sender: Option<&AnyObject>) {
-                let mtm = self.mtm();
-                let panel = NSOpenPanel::openPanel(mtm);
-                panel.setCanChooseDirectories(true);
-                panel.setCanChooseFiles(false);
-                panel.setAllowsMultipleSelection(false);
-                panel.setMessage(Some(&NSString::from_str(
-                    "Select the CrossOver bottle CrossPuck should use",
-                )));
-
-                // Start next to the current bottle when one is set, otherwise
-                // at the bottles root that auto-detection scans.
-                let context = self.ivars().driver_state.current_context();
-                let start_dir = context
-                    .bottle_path
-                    .as_deref()
-                    .and_then(Path::parent)
-                    .map(Path::to_path_buf)
-                    .or(context.crossover_bottles_dir)
-                    .filter(|path| path.is_dir());
-                if let Some(dir) = start_dir {
-                    let url = NSURL::fileURLWithPath(&NSString::from_str(&dir.to_string_lossy()));
-                    panel.setDirectoryURL(Some(&url));
-                }
-
-                // An accessory (menu bar) app is not frontmost, so bring it
-                // forward before running the modal or the picker hides behind
-                // other windows.
-                activate_app(mtm);
-                if panel.runModal() != NSModalResponseOK {
-                    return;
-                }
-                let Some(path) = panel.URL().and_then(|url| url.path()) else {
-                    return;
-                };
-                let path = PathBuf::from(path.to_string());
-                crate::settings::set_stored_bottle_path(&path);
-                self.apply_bottle_path_change();
-            }
-
-            #[unsafe(method(resetBottle:))]
-            fn reset_bottle(&self, _sender: Option<&AnyObject>) {
-                crate::settings::clear_stored_bottle_path();
-                self.apply_bottle_path_change();
-            }
-
-            #[unsafe(method(toggleDuplicateXInput:))]
-            fn toggle_duplicate_xinput(&self, _sender: Option<&AnyObject>) {
-                let driver_state = &self.ivars().driver_state;
-                let Some(bottle) = active_bottle(driver_state) else {
-                    refresh_duplicate_xinput_item(driver_state, &self.ivars().items);
-                    return;
-                };
-                let result = duplicate_xinput_hidden(&bottle).and_then(|hidden| {
-                    set_duplicate_xinput_hidden(&bottle, !hidden)?;
-                    Ok(!hidden)
-                });
-                match result {
-                    Ok(hidden) => log::info!(
-                        "CrossPuck duplicate XInput controller hidden={hidden} bottle={}; restart the bottle to apply",
-                        bottle.display()
-                    ),
-                    Err(error) => {
-                        log::error!("CrossPuck could not update {}: {error}", bottle.display());
-                        let mtm = self.mtm();
-                        let alert = NSAlert::new(mtm);
-                        alert.setMessageText(&NSString::from_str("Could not update the bottle"));
-                        alert.setInformativeText(&NSString::from_str(&format!(
-                            "{}\n\n{error}", display_path(&bottle)
-                        )));
-                        activate_app(mtm);
-                        alert.runModal();
-                    }
-                }
-                refresh_duplicate_xinput_item(driver_state, &self.ivars().items);
-            }
-        }
-    );
-
-    impl BottleController {
-        fn new(
-            mtm: MainThreadMarker,
-            driver_state: Arc<DriverMenuState>,
-            items: StateMenuItems,
-        ) -> Retained<Self> {
-            let this = Self::alloc(mtm).set_ivars(BottleControllerIvars {
-                driver_state,
-                items,
-            });
-            unsafe { msg_send![super(this), init] }
-        }
-
-        fn apply_bottle_path_change(&self) {
-            let driver_state = &self.ivars().driver_state;
-            driver_state.set_bottle_path(crate::settings::resolve_bottle_path());
-            driver_state.refresh_status();
-            refresh_driver_items(driver_state, &self.ivars().items);
-            refresh_bottle_items(driver_state, &self.ivars().items);
-            refresh_duplicate_xinput_item(driver_state, &self.ivars().items);
-        }
-    }
-
-    struct ReconnectControllerIvars {
-        app_state: AppState,
-    }
-
-    define_class!(
-        #[unsafe(super = NSObject)]
-        #[thread_kind = objc2::MainThreadOnly]
-        #[ivars = ReconnectControllerIvars]
-        struct ReconnectController;
-
-        unsafe impl NSObjectProtocol for ReconnectController {}
-
-        impl ReconnectController {
-            #[unsafe(method(forceReconnect:))]
-            fn force_reconnect(&self, _sender: Option<&AnyObject>) {
-                self.ivars().app_state.request_reconnect();
-            }
-        }
-    );
-
-    impl ReconnectController {
-        fn new(mtm: MainThreadMarker, app_state: AppState) -> Retained<Self> {
-            let this = Self::alloc(mtm).set_ivars(ReconnectControllerIvars { app_state });
-            unsafe { msg_send![super(this), init] }
-        }
-    }
-
-    struct AudioControllerIvars {
-        items: StateMenuItems,
-    }
-
-    define_class!(
-        #[unsafe(super = NSObject)]
-        #[thread_kind = objc2::MainThreadOnly]
-        #[ivars = AudioControllerIvars]
-        struct AudioController;
-
-        unsafe impl NSObjectProtocol for AudioController {}
-
-        impl AudioController {
-            #[unsafe(method(toggleAudio:))]
-            fn toggle_audio(&self, _sender: Option<&AnyObject>) {
-                let items = &self.ivars().items;
-                let enabled = !items.audio_service.enabled();
-                crate::settings::set_follow_audio_output(enabled);
-                items.audio_service.set_enabled(enabled);
-                refresh_audio_items(items);
-            }
-        }
-    );
-
-    impl AudioController {
-        fn new(mtm: MainThreadMarker, items: StateMenuItems) -> Retained<Self> {
-            let this = Self::alloc(mtm).set_ivars(AudioControllerIvars { items });
-            unsafe { msg_send![super(this), init] }
-        }
-    }
-
-    struct QuitControllerIvars {
-        app: Retained<NSApplication>,
-    }
-
-    define_class!(
-        #[unsafe(super = NSObject)]
-        #[thread_kind = objc2::MainThreadOnly]
-        #[ivars = QuitControllerIvars]
-        struct QuitController;
-
-        unsafe impl NSObjectProtocol for QuitController {}
-
-        impl QuitController {
-            #[unsafe(method(quit:))]
-            fn quit(&self, sender: Option<&AnyObject>) {
-                self.ivars().app.terminate(sender);
-            }
-        }
-    );
-
-    impl QuitController {
-        fn new(mtm: MainThreadMarker, app: Retained<NSApplication>) -> Retained<Self> {
-            let this = Self::alloc(mtm).set_ivars(QuitControllerIvars { app });
-            unsafe { msg_send![super(this), init] }
-        }
-    }
-
-    struct AppDelegateIvars {
-        service_handle: HostServiceHandle,
-        audio_service: AudioService,
-    }
-
-    define_class!(
-        #[unsafe(super = NSObject)]
-        #[thread_kind = objc2::MainThreadOnly]
-        #[ivars = AppDelegateIvars]
-        struct AppDelegate;
-
-        unsafe impl NSObjectProtocol for AppDelegate {}
-
-        unsafe impl NSApplicationDelegate for AppDelegate {
-            #[unsafe(method(applicationWillTerminate:))]
-            fn application_will_terminate(&self, _notification: &NSNotification) {
-                // Both Quit and Sparkle install/relaunch must restore audio
-                // and release HID/IPC resources before the app exits.
-                self.ivars().audio_service.shutdown();
-                self.ivars().service_handle.shutdown();
-            }
-        }
-    );
-
-    impl AppDelegate {
-        fn new(
-            mtm: MainThreadMarker,
-            service_handle: HostServiceHandle,
-            audio_service: AudioService,
-        ) -> Retained<Self> {
-            let this = Self::alloc(mtm).set_ivars(AppDelegateIvars {
-                service_handle,
-                audio_service,
-            });
-            unsafe { msg_send![super(this), init] }
-        }
-    }
-
-    pub fn run() -> ExitCode {
-        let logging_config = crate::logging::startup_config();
-        let logging_initialized = crate::logging::init(&logging_config).is_ok();
-        if logging_initialized {
-            crate::logging::log_startup(&logging_config);
-        }
-        crate::probe::start_from_env();
-
-        let mtm = MainThreadMarker::new().expect("crosspuck-app must run on the main thread");
-
-        unsafe {
-            let _pool = NSAutoreleasePool::new();
-            let app = NSApplication::sharedApplication(mtm);
-            app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
-
-            let audio_service = AudioService::start(crate::settings::follow_audio_output());
-            let app_state = AppState::new();
-            let service_handle = start_host_service_with_config(
-                app_state.clone(),
-                HostServiceConfig {
-                    guest_runtime_overrides: logging_config.guest_runtime_overrides(),
-                },
-            );
-            log::info!("CrossPuck host app started");
-            let menu_objects = build_menu_bar(
-                app.clone(),
-                mtm,
-                &app_state,
-                service_handle,
-                audio_service.clone(),
-            );
-            // Keep targets/delegates alive for app.run without leaking their
-            // Rust owners (and the AudioService handles they retain).
-            app.run();
-            audio_service.shutdown();
-            menu_objects._refresh_timer.invalidate();
-            menu_objects._menu.setDelegate(None);
-            menu_objects._app_delegate.ivars().service_handle.shutdown();
-            app.setDelegate(None);
-            NSStatusBar::systemStatusBar().removeStatusItem(&menu_objects._status_item);
-            drop(menu_objects);
-        }
-
-        log::info!("CrossPuck host app stopped");
-        ExitCode::SUCCESS
-    }
-
-    unsafe fn build_menu_bar(
-        app: Retained<NSApplication>,
-        mtm: MainThreadMarker,
-        app_state: &AppState,
-        service_handle: HostServiceHandle,
-        audio_service: AudioService,
-    ) -> MenuBarObjects {
-        let status_bar = NSStatusBar::systemStatusBar();
-        let status_item = status_bar.statusItemWithLength(NSSquareStatusItemLength);
-        let status_icon = load_status_icon();
-
-        if let Some(button) = status_item.button(mtm) {
-            if let Some(icon) = status_icon.as_ref() {
-                button.setTitle(&NSString::from_str(""));
-                button.setImage(Some(icon.as_ref()));
-                button.setImagePosition(NSCellImagePosition::ImageOnly);
-                button.setImageScaling(NSImageScaling::ScaleProportionallyDown);
-            } else {
-                button.setTitle(&NSString::from_str("CP"));
+                self.refresh();
             }
         }
 
-        let menu = NSMenu::new(mtm);
-        menu.setAutoenablesItems(false);
-        let mut driver_context = DriverInstallContext::from_environment(bundle_resources_dir());
-        driver_context.crossover_bottles_dir = crate::settings::resolve_bottles_dir();
-        driver_context.bottle_path = crate::settings::resolve_bottle_path();
-        let driver_state = Arc::new(DriverMenuState::new(driver_context));
-        driver_state.refresh_status();
-
-        let empty_key = NSString::from_str("");
-        let bottle_menu = NSMenu::new(mtm);
-        bottle_menu.setAutoenablesItems(false);
-
-        // Advanced > Bottle Path > (bottle items)
-        let advanced_menu = NSMenu::new(mtm);
-        advanced_menu.setAutoenablesItems(false);
-        let bottle_path_item = advanced_menu.addItemWithTitle_action_keyEquivalent(
-            &NSString::from_str("Bottle Path"),
-            None,
-            &empty_key,
-        );
-        bottle_path_item.setSubmenu(Some(&bottle_menu));
-
-        let state_items = StateMenuItems {
-            status: menu.addItemWithTitle_action_keyEquivalent(
-                &NSString::from_str("Status: Starting"),
-                None,
-                &empty_key,
-            ),
-            puck: menu.addItemWithTitle_action_keyEquivalent(
-                &NSString::from_str("Puck: -"),
-                None,
-                &empty_key,
-            ),
-            guest: menu.addItemWithTitle_action_keyEquivalent(
-                &NSString::from_str("Guest: -"),
-                None,
-                &empty_key,
-            ),
-            error: menu.addItemWithTitle_action_keyEquivalent(
-                &NSString::from_str("Last error: -"),
-                None,
-                &empty_key,
-            ),
-            driver_status: {
-                let separator = NSMenuItem::separatorItem(mtm);
-                menu.addItem(&separator);
-                menu.addItemWithTitle_action_keyEquivalent(
-                    &NSString::from_str("Driver: Checking..."),
-                    None,
-                    &empty_key,
-                )
-            },
-            driver_action: menu.addItemWithTitle_action_keyEquivalent(
-                &NSString::from_str("Install Steam Driver..."),
-                Some(sel!(installDriver:)),
-                &empty_key,
-            ),
-            driver_uninstall: menu.addItemWithTitle_action_keyEquivalent(
-                &NSString::from_str("Uninstall Steam Driver..."),
-                Some(sel!(uninstallDriver:)),
-                &empty_key,
-            ),
-            bottle_info: bottle_menu.addItemWithTitle_action_keyEquivalent(
-                &NSString::from_str("Bottle: -"),
-                None,
-                &empty_key,
-            ),
-            bottle_choose: bottle_menu.addItemWithTitle_action_keyEquivalent(
-                &NSString::from_str("Choose Bottle..."),
-                Some(sel!(chooseBottle:)),
-                &empty_key,
-            ),
-            bottle_reset: bottle_menu.addItemWithTitle_action_keyEquivalent(
-                &NSString::from_str("Reset to Default"),
-                Some(sel!(resetBottle:)),
-                &empty_key,
-            ),
-            audio_enabled: {
-                menu.addItem(&NSMenuItem::separatorItem(mtm));
-                menu.addItemWithTitle_action_keyEquivalent(
-                    &NSString::from_str("Follow macOS Audio Output"),
-                    Some(sel!(toggleAudio:)),
-                    &empty_key,
-                )
-            },
-            audio_status: menu.addItemWithTitle_action_keyEquivalent(
-                &NSString::from_str("Audio: Starting…"),
-                None,
-                &empty_key,
-            ),
-            audio_service: audio_service.clone(),
-            duplicate_xinput: advanced_menu.addItemWithTitle_action_keyEquivalent(
-                &NSString::from_str("Hide Duplicate XInput Controller"),
-                Some(sel!(toggleDuplicateXInput:)),
-                &empty_key,
-            ),
-        };
-        state_items.status.setEnabled(false);
-        state_items.puck.setEnabled(false);
-        state_items.guest.setEnabled(false);
-        state_items.error.setEnabled(false);
-        state_items.driver_status.setEnabled(false);
-        state_items.bottle_info.setEnabled(false);
-        state_items.audio_status.setEnabled(false);
-        state_items
-            .audio_enabled
-            .setEnabled(audio_service.supported());
-
-        let separator = NSMenuItem::separatorItem(mtm);
-        menu.addItem(&separator);
-        let reconnect_item = advanced_menu.addItemWithTitle_action_keyEquivalent(
-            &NSString::from_str("Force Reconnect"),
-            Some(sel!(forceReconnect:)),
-            &empty_key,
-        );
-        let advanced_item = menu.addItemWithTitle_action_keyEquivalent(
-            &NSString::from_str("Advanced"),
-            None,
-            &empty_key,
-        );
-        advanced_item.setSubmenu(Some(&advanced_menu));
-
-        let driver_controller =
-            DriverInstallController::new(mtm, Arc::clone(&driver_state), state_items.clone());
-        state_items
-            .driver_action
-            .setTarget(Some(driver_controller.as_ref()));
-        state_items
-            .driver_uninstall
-            .setTarget(Some(driver_controller.as_ref()));
-
-        let bottle_controller =
-            BottleController::new(mtm, Arc::clone(&driver_state), state_items.clone());
-        state_items
-            .bottle_choose
-            .setTarget(Some(bottle_controller.as_ref()));
-
-        state_items
-            .bottle_reset
-            .setTarget(Some(bottle_controller.as_ref()));
-        state_items
-            .duplicate_xinput
-            .setTarget(Some(bottle_controller.as_ref()));
-
-        let reconnect_controller = ReconnectController::new(mtm, app_state.clone());
-        reconnect_item.setTarget(Some(reconnect_controller.as_ref()));
-
-        let updates = UpdateMenuController::new(mtm, &menu);
-
-        let audio_controller = AudioController::new(mtm, state_items.clone());
-        state_items
-            .audio_enabled
-            .setTarget(Some(audio_controller.as_ref()));
-
-        let menu_delegate = StateMenuDelegate::new(
-            mtm,
-            app_state.clone(),
-            Arc::clone(&driver_state),
-            state_items.clone(),
-            updates.clone(),
-        );
-        menu.setDelegate(Some(ProtocolObject::from_ref(&*menu_delegate)));
-        refresh_state_items(app_state, &driver_state, &state_items);
-        refresh_duplicate_xinput_item(&driver_state, &state_items);
-        let refresh_timer =
-            NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
-                0.5,
-                menu_delegate.as_ref(),
-                sel!(refreshTimer:),
-                None,
-                true,
-            );
-
-        let separator = NSMenuItem::separatorItem(mtm);
-        menu.addItem(&separator);
-
-        let app_delegate = AppDelegate::new(mtm, service_handle, audio_service);
-        app.setDelegate(Some(ProtocolObject::from_ref(&*app_delegate)));
-        let quit_controller = QuitController::new(mtm, app.clone());
-        let quit_title = NSString::from_str("Quit");
-        let quit_key = NSString::from_str("q");
-        let quit_item =
-            menu.addItemWithTitle_action_keyEquivalent(&quit_title, Some(sel!(quit:)), &quit_key);
-        quit_item.setTarget(Some(quit_controller.as_ref()));
-
-        status_item.setMenu(Some(&menu));
-
-        MenuBarObjects {
-            _status_item: status_item,
-            _icon: status_icon,
-            _menu: menu,
-            _state_items: state_items,
-            _menu_delegate: menu_delegate,
-            _refresh_timer: refresh_timer,
-            _driver_controller: driver_controller,
-            _bottle_controller: bottle_controller,
-            _reconnect_controller: reconnect_controller,
-            _quit_controller: quit_controller,
-            _audio_controller: audio_controller,
-            _updates: updates,
-            _app_delegate: app_delegate,
+        #[unsafe(method(quit:))]
+        fn quit(&self, _sender: Option<&AnyObject>) {
+            NSApplication::sharedApplication(self.mtm()).terminate(None);
         }
     }
+);
 
-    fn refresh_state_items(
-        app_state: &AppState,
-        driver_state: &DriverMenuState,
-        items: &StateMenuItems,
-    ) {
-        crate::probe::note_menu_refresh();
-        let view = app_state.snapshot().menu_view();
+impl Controller {
+    fn new(mtm: MainThreadMarker, ivars: ControllerIvars) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(ivars);
+        // SAFETY: Initialize our NSObject subclass after setting its Rust ivars.
+        unsafe { msg_send![super(this), init] }
+    }
+
+    fn refresh(&self) {
+        let items = self.ivars();
+        let language = items.language.get();
+        items
+            .follow
+            .setTitle(&NSString::from_str(&language.follow()));
+        items.follow.setState(if items.audio.enabled() {
+            NSControlStateValueOn
+        } else {
+            NSControlStateValueOff
+        });
         items
             .status
-            .setTitle(&NSString::from_str(&format!("Status: {}", view.status)));
+            .setTitle(&NSString::from_str(&language.status(&items.audio.status())));
         items
-            .puck
-            .setTitle(&NSString::from_str(&format!("Puck: {}", view.puck)));
-        items
-            .guest
-            .setTitle(&NSString::from_str(&format!("Guest: {}", view.guest)));
-        items
-            .error
-            .setTitle(&NSString::from_str(&format!("Last error: {}", view.error)));
-        refresh_driver_items(driver_state, items);
-        refresh_bottle_items(driver_state, items);
-        refresh_audio_items(items);
-    }
-
-    fn refresh_audio_items(items: &StateMenuItems) {
-        items
-            .audio_enabled
-            .setState(if items.audio_service.enabled() {
+            .language_menu
+            .setTitle(&NSString::from_str(&language.language()));
+        items.quit.setTitle(&NSString::from_str(&language.quit()));
+        for (item, choice) in items.languages.iter().zip(Language::ALL) {
+            item.setState(if language == choice {
                 NSControlStateValueOn
             } else {
                 NSControlStateValueOff
             });
-        items
-            .audio_status
-            .setTitle(&NSString::from_str(&items.audio_service.status().title()));
-    }
-
-    fn refresh_bottle_items(driver_state: &DriverMenuState, items: &StateMenuItems) {
-        let env_override = crate::settings::env_override_active();
-        // When CROSSPUCK_BOTTLE_PATH is set it wins over any menu selection, so
-        // say so and disable the picker rather than letting Choose/Reset look
-        // like they do nothing.
-        let label = match driver_state.current_context().bottle_path.as_deref() {
-            Some(path) if env_override => {
-                format!(
-                    "Bottle: {} (set by CROSSPUCK_BOTTLE_PATH)",
-                    display_path(path)
-                )
-            }
-            Some(path) => format!("Bottle: {}", display_path(path)),
-            None => match driver_state.discovered_bottle() {
-                Some(path) => format!("Bottle: {} (auto)", display_path(&path)),
-                None => "Bottle: (auto)".to_string(),
-            },
-        };
-        items.bottle_info.setTitle(&NSString::from_str(&label));
-        items.bottle_choose.setEnabled(!env_override);
-        // "Reset to Default" only makes sense when a bottle has been chosen and
-        // the env var is not overriding it.
-        items
-            .bottle_reset
-            .setEnabled(!env_override && crate::settings::stored_bottle_path().is_some());
-    }
-
-    fn active_bottle(driver_state: &DriverMenuState) -> Option<PathBuf> {
-        // Resolve independently of bundled-driver status and stale install snapshots.
-        discover_bottle(&driver_state.current_context())
-            .filter(|bottle| find_steam_dir(bottle).is_some())
-    }
-
-    fn refresh_duplicate_xinput_item(driver_state: &DriverMenuState, items: &StateMenuItems) {
-        let bottle = active_bottle(driver_state);
-        let state = bottle.as_deref().map(duplicate_xinput_hidden);
-        items.duplicate_xinput.setState(match state {
-            Some(Ok(true)) => NSControlStateValueOn,
-            Some(Err(_)) => NSControlStateValueMixed,
-            _ => NSControlStateValueOff,
-        });
-        items
-            .duplicate_xinput
-            .setEnabled(matches!(state, Some(Ok(_))));
-        let tooltip = match state {
-            Some(Ok(_)) => format!(
-                "Hide all controllers with VID/PID 0x05AC/0x0004 in {}. The checkmark reflects the saved setting. Quit all apps in this bottle and restart the bottle to apply. Other ignored controllers are preserved.",
-                display_path(bottle.as_deref().unwrap())
-            ),
-            Some(Err(error)) => format!("Cannot safely edit this bottle's controller settings: {error}"),
-            None => "Choose a CrossOver bottle with Steam installed to use this option.".to_string(),
-        };
-        items
-            .duplicate_xinput
-            .setToolTip(Some(&NSString::from_str(&tooltip)));
-    }
-
-    fn display_path(path: &Path) -> String {
-        if let Some(home) = std::env::var_os("HOME") {
-            if let Ok(rest) = path.strip_prefix(&home) {
-                if rest.as_os_str().is_empty() {
-                    return "~".to_string();
-                }
-                return format!("~/{}", rest.display());
-            }
         }
-        path.display().to_string()
     }
+}
 
-    // `NSApplication::activate()` is the modern replacement but is macOS 14+
-    // only, so keep using `activateIgnoringOtherApps` for broader compatibility.
-    #[allow(deprecated)]
-    fn activate_app(mtm: MainThreadMarker) {
-        NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
-    }
-
-    fn refresh_driver_items(driver_state: &DriverMenuState, items: &StateMenuItems) {
-        let view = driver_state.menu_view();
-        items
-            .driver_status
-            .setTitle(&NSString::from_str(&view.status_title));
-        items
-            .driver_action
-            .setTitle(&NSString::from_str(&view.install_title));
-        items.driver_action.setEnabled(view.install_enabled);
-        items
-            .driver_uninstall
-            .setTitle(&NSString::from_str(&view.uninstall_title));
-        items.driver_uninstall.setEnabled(view.uninstall_enabled);
-    }
-
-    #[derive(Debug)]
-    struct DriverMenuState {
-        context: Mutex<DriverInstallContext>,
-        snapshot: Mutex<DriverMenuSnapshot>,
-    }
-
-    #[derive(Clone, Debug)]
-    enum DriverMenuSnapshot {
-        Checking,
-        Installing,
-        Uninstalling,
-        Status(DriverInstallStatus),
-        InstallFailed { message: String },
-        UninstallFailed { message: String },
-    }
-
-    #[derive(Clone, Debug)]
-    struct DriverMenuView {
-        status_title: String,
-        install_title: String,
-        install_enabled: bool,
-        uninstall_title: String,
-        uninstall_enabled: bool,
-    }
-
-    impl DriverMenuState {
-        fn new(context: DriverInstallContext) -> Self {
-            Self {
-                context: Mutex::new(context),
-                snapshot: Mutex::new(DriverMenuSnapshot::Checking),
-            }
-        }
-
-        /// Clone the current install context. The bottles root inside it can be
-        /// swapped at runtime via [`set_bottles_dir`], so callers always read a
-        /// fresh copy rather than capturing it once.
-        fn current_context(&self) -> DriverInstallContext {
-            self.context
-                .lock()
-                .map(|context| context.clone())
-                .unwrap_or_default()
-        }
-
-        /// Point the driver workflow at an explicit CrossOver bottle, or
-        /// `None` to fall back to automatic detection.
-        fn set_bottle_path(&self, bottle_path: Option<PathBuf>) {
-            if let Ok(mut context) = self.context.lock() {
-                context.bottle_path = bottle_path;
-            }
-        }
-
-        /// Bottle found by the most recent driver status check, if any.
-        fn discovered_bottle(&self) -> Option<PathBuf> {
-            self.snapshot
-                .lock()
-                .ok()
-                .and_then(|snapshot| match &*snapshot {
-                    DriverMenuSnapshot::Status(status) => status.bottle_path.clone(),
-                    _ => None,
-                })
-        }
-
-        fn refresh_status(&self) {
-            if self.is_installing() {
-                return;
-            }
-            crate::probe::note_driver_status_check();
-
-            let status = check_driver_install_status(&self.current_context());
-            if let Ok(mut snapshot) = self.snapshot.lock() {
-                *snapshot = DriverMenuSnapshot::Status(status);
-            }
-        }
-
-        fn start_install(self: &Arc<Self>) -> bool {
-            let Ok(mut snapshot) = self.snapshot.lock() else {
-                return false;
-            };
-            if !driver_snapshot_allows_install(&snapshot) {
-                return false;
-            }
-            *snapshot = DriverMenuSnapshot::Installing;
-            drop(snapshot);
-
-            let state = Arc::clone(self);
-            let context = self.current_context();
-            thread::spawn(move || {
-                let next = match install_driver(&context) {
-                    Ok(result) => {
-                        log::info!(
-                            "CrossPuck driver installed: target={} backup={} sha256={} registry={}",
-                            result.target_dll.display(),
-                            result
-                                .backup_path
-                                .as_ref()
-                                .map(|path| path.display().to_string())
-                                .unwrap_or_else(|| "-".to_string()),
-                            result.installed_sha256,
-                            result.registry_targets.join(",")
-                        );
-                        DriverMenuSnapshot::Status(check_driver_install_status(&context))
-                    }
-                    Err(error) => {
-                        log::error!("CrossPuck driver install failed: {error}");
-                        DriverMenuSnapshot::InstallFailed {
-                            message: short_menu_message(&error.to_string()),
-                        }
-                    }
-                };
-
-                if let Ok(mut snapshot) = state.snapshot.lock() {
-                    *snapshot = next;
-                }
-            });
-            true
-        }
-
-        fn start_uninstall(self: &Arc<Self>) -> bool {
-            let Ok(mut snapshot) = self.snapshot.lock() else {
-                return false;
-            };
-            if !driver_snapshot_allows_uninstall(&snapshot) {
-                return false;
-            }
-            *snapshot = DriverMenuSnapshot::Uninstalling;
-            drop(snapshot);
-
-            let state = Arc::clone(self);
-            let context = self.current_context();
-            thread::spawn(move || {
-                let next = match uninstall_driver(&context) {
-                    Ok(result) => {
-                        log::info!(
-                            "CrossPuck driver uninstalled: target={} removed={} registry={}",
-                            result.target_dll.display(),
-                            result.removed_driver,
-                            result.registry_targets.join(",")
-                        );
-                        DriverMenuSnapshot::Status(check_driver_install_status(&context))
-                    }
-                    Err(error) => {
-                        log::error!("CrossPuck driver uninstall failed: {error}");
-                        DriverMenuSnapshot::UninstallFailed {
-                            message: short_menu_message(&error.to_string()),
-                        }
-                    }
-                };
-
-                if let Ok(mut snapshot) = state.snapshot.lock() {
-                    *snapshot = next;
-                }
-            });
-            true
-        }
-
-        fn menu_view(&self) -> DriverMenuView {
-            let snapshot = self
-                .snapshot
-                .lock()
-                .map(|snapshot| snapshot.clone())
-                .unwrap_or(DriverMenuSnapshot::InstallFailed {
-                    message: "state lock poisoned".to_string(),
-                });
-            match snapshot {
-                DriverMenuSnapshot::Checking => DriverMenuView {
-                    status_title: "Driver: Checking...".to_string(),
-                    install_title: "Install Steam Driver...".to_string(),
-                    install_enabled: false,
-                    uninstall_title: "Uninstall Steam Driver...".to_string(),
-                    uninstall_enabled: false,
-                },
-                DriverMenuSnapshot::Installing => DriverMenuView {
-                    status_title: "Driver: Installing...".to_string(),
-                    install_title: "Installing...".to_string(),
-                    install_enabled: false,
-                    uninstall_title: "Uninstall Steam Driver...".to_string(),
-                    uninstall_enabled: false,
-                },
-                DriverMenuSnapshot::Uninstalling => DriverMenuView {
-                    status_title: "Driver: Uninstalling...".to_string(),
-                    install_title: "Install Steam Driver...".to_string(),
-                    install_enabled: false,
-                    uninstall_title: "Uninstalling...".to_string(),
-                    uninstall_enabled: false,
-                },
-                DriverMenuSnapshot::Status(status) => {
-                    let uninstall_enabled = status_allows_uninstall(&status);
-                    DriverMenuView {
-                        status_title: status.status_title,
-                        install_title: status.action_title,
-                        install_enabled: status.action_enabled,
-                        uninstall_title: "Uninstall Steam Driver...".to_string(),
-                        uninstall_enabled,
-                    }
-                }
-                DriverMenuSnapshot::InstallFailed { message } => DriverMenuView {
-                    status_title: format!("Driver: Install failed: {message}"),
-                    install_title: "Retry Steam Driver...".to_string(),
-                    install_enabled: true,
-                    uninstall_title: "Uninstall Steam Driver...".to_string(),
-                    uninstall_enabled: false,
-                },
-                DriverMenuSnapshot::UninstallFailed { message } => DriverMenuView {
-                    status_title: format!("Driver: Uninstall failed: {message}"),
-                    install_title: "Install Steam Driver...".to_string(),
-                    install_enabled: false,
-                    uninstall_title: "Retry Uninstall...".to_string(),
-                    uninstall_enabled: true,
-                },
-            }
-        }
-
-        fn is_installing(&self) -> bool {
-            self.snapshot.lock().is_ok_and(|snapshot| {
-                matches!(
-                    *snapshot,
-                    DriverMenuSnapshot::Installing | DriverMenuSnapshot::Uninstalling
-                )
+fn main() {
+    logging::init();
+    let mtm = MainThreadMarker::new().expect("CrossPuck must run on the main thread");
+    // SAFETY: AppKit setup and the application event loop stay on the main thread.
+    unsafe {
+        let _pool = NSAutoreleasePool::new();
+        let defaults = NSUserDefaults::standardUserDefaults();
+        let key = NSString::from_str(FOLLOW_KEY);
+        let enabled = defaults.objectForKey(&key).is_none() || defaults.boolForKey(&key);
+        let language = defaults
+            .stringForKey(&NSString::from_str(LANGUAGE_KEY))
+            .or_else(|| NSLocale::preferredLanguages().firstObject())
+            .map(|s| Language::from_code(&s.to_string()))
+            .unwrap_or(Language::English);
+        let audio = AudioService::start(enabled);
+        let app = NSApplication::sharedApplication(mtm);
+        app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+        let menu = NSMenu::new(mtm);
+        menu.setAutoenablesItems(false);
+        let empty = NSString::new();
+        let follow =
+            menu.addItemWithTitle_action_keyEquivalent(&empty, Some(sel!(toggleFollow:)), &empty);
+        let status = menu.addItemWithTitle_action_keyEquivalent(&empty, None, &empty);
+        status.setEnabled(false);
+        menu.addItem(&NSMenuItem::separatorItem(mtm));
+        let language_menu = menu.addItemWithTitle_action_keyEquivalent(&empty, None, &empty);
+        let submenu = NSMenu::new(mtm);
+        submenu.setAutoenablesItems(false);
+        let languages: Vec<_> = Language::ALL
+            .iter()
+            .enumerate()
+            .map(|(index, language)| {
+                let item = submenu.addItemWithTitle_action_keyEquivalent(
+                    &NSString::from_str(language.name()),
+                    Some(sel!(selectLanguage:)),
+                    &empty,
+                );
+                item.setTag(index as isize);
+                item
             })
+            .collect();
+        language_menu.setSubmenu(Some(&submenu));
+        menu.addItem(&NSMenuItem::separatorItem(mtm));
+        let quit = menu.addItemWithTitle_action_keyEquivalent(
+            &empty,
+            Some(sel!(quit:)),
+            &NSString::from_str("q"),
+        );
+        let controller = Controller::new(
+            mtm,
+            ControllerIvars {
+                audio: audio.clone(),
+                language: Cell::new(language),
+                follow,
+                status,
+                language_menu,
+                languages,
+                quit,
+            },
+        );
+        for item in [&controller.ivars().follow, &controller.ivars().quit]
+            .into_iter()
+            .chain(controller.ivars().languages.iter())
+        {
+            item.setTarget(Some(controller.as_ref()));
         }
-    }
-
-    fn short_menu_message(message: &str) -> String {
-        const MAX_LEN: usize = 96;
-        let trimmed = message.trim();
-        if trimmed.chars().count() <= MAX_LEN {
-            return trimmed.to_string();
-        }
-        let mut shortened = trimmed.chars().take(MAX_LEN).collect::<String>();
-        shortened.push_str("...");
-        shortened
-    }
-
-    fn driver_snapshot_allows_install(snapshot: &DriverMenuSnapshot) -> bool {
-        match snapshot {
-            DriverMenuSnapshot::Status(status) => status.action_enabled,
-            DriverMenuSnapshot::InstallFailed { .. } => true,
-            DriverMenuSnapshot::Checking
-            | DriverMenuSnapshot::Installing
-            | DriverMenuSnapshot::Uninstalling
-            | DriverMenuSnapshot::UninstallFailed { .. } => false,
-        }
-    }
-
-    fn driver_snapshot_allows_uninstall(snapshot: &DriverMenuSnapshot) -> bool {
-        match snapshot {
-            DriverMenuSnapshot::Status(status) => status_allows_uninstall(status),
-            DriverMenuSnapshot::UninstallFailed { .. } => true,
-            DriverMenuSnapshot::Checking
-            | DriverMenuSnapshot::Installing
-            | DriverMenuSnapshot::Uninstalling
-            | DriverMenuSnapshot::InstallFailed { .. } => false,
-        }
-    }
-
-    fn status_allows_uninstall(status: &DriverInstallStatus) -> bool {
-        matches!(
-            status.state,
-            DriverInstallState::Installed | DriverInstallState::UpdateAvailable
-        )
-    }
-
-    unsafe fn bundle_resources_dir() -> Option<PathBuf> {
-        NSBundle::mainBundle()
-            .resourcePath()
-            .map(|path| PathBuf::from(path.to_string()))
-    }
-
-    unsafe fn load_status_icon() -> Option<Retained<NSImage>> {
-        let name = NSString::from_str("CrossPuckStatusTemplate");
-        let pdf_ext = NSString::from_str("pdf");
-        let pdf_source_path = NSString::from_str(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/Resources/CrossPuckStatusTemplate.pdf"
-        ));
-        if let Some(image) = load_template_image(&name, &pdf_ext, &pdf_source_path) {
-            return Some(image);
-        }
-
-        let ext = NSString::from_str("png");
-        let source_path = NSString::from_str(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/Resources/CrossPuckStatusTemplate.png"
-        ));
-        load_template_image(&name, &ext, &source_path)
-    }
-
-    unsafe fn load_template_image(
-        name: &NSString,
-        ext: &NSString,
-        source_path: &NSString,
-    ) -> Option<Retained<NSImage>> {
-        let bundle_path = NSBundle::mainBundle().pathForResource_ofType(Some(name), Some(ext));
-        let path = bundle_path.as_deref().unwrap_or(source_path);
-        let image = NSImage::initWithContentsOfFile(NSImage::alloc(), path)?;
-        image.setTemplate(true);
-        Some(image)
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use std::fs;
-        use std::time::{SystemTime, UNIX_EPOCH};
-
-        #[test]
-        fn controller_toggle_resolves_current_bottle_without_bundled_driver() {
-            let root = std::env::temp_dir().join(format!(
-                "crosspuck-active-bottle-{}-{}",
-                std::process::id(),
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos()
-            ));
-            let default = root.join("Bottles/Steam");
-            let external = root.join("External/Preview Steam");
-            for bottle in [&default, &external] {
-                let steam = bottle.join("drive_c/Program Files (x86)/Steam");
-                fs::create_dir_all(&steam).unwrap();
-                fs::write(steam.join("steam.exe"), "").unwrap();
-                fs::write(bottle.join("cxbottle.conf"), "[EnvironmentVariables]\n\"SDL_GAMECONTROLLER_IGNORE_DEVICES\"=\"0x045E/0x028E\"\n").unwrap();
+        menu.setDelegate(Some(ProtocolObject::from_ref(&*controller)));
+        app.setDelegate(Some(ProtocolObject::from_ref(&*controller)));
+        controller.refresh();
+        let bar = NSStatusBar::systemStatusBar();
+        let status_item = bar.statusItemWithLength(NSSquareStatusItemLength);
+        if let Some(button) = status_item.button(mtm) {
+            if let Some(image) = NSImage::imageWithSystemSymbolName_accessibilityDescription(
+                &NSString::from_str("speaker.wave.2.fill"),
+                Some(&NSString::from_str("CrossPuck Audio")),
+            ) {
+                image.setTemplate(true);
+                button.setImage(Some(&image));
+            } else {
+                button.setTitle(&NSString::from_str("Audio"));
             }
-            let state = DriverMenuState::new(DriverInstallContext {
-                crossover_bottles_dir: Some(root.join("Bottles")),
-                ..DriverInstallContext::default()
-            });
-            state.refresh_status();
-            assert!(matches!(
-                &*state.snapshot.lock().unwrap(),
-                DriverMenuSnapshot::Status(DriverInstallStatus {
-                    state: DriverInstallState::BundledDriverMissing,
-                    ..
-                })
-            ));
-            assert_eq!(active_bottle(&state), Some(default.clone()));
-            state.set_bottle_path(Some(external.clone()));
-            assert_eq!(active_bottle(&state), Some(external.clone()));
-            let default_config = fs::read(default.join("cxbottle.conf")).unwrap();
-            let external_config = fs::read(external.join("cxbottle.conf")).unwrap();
-            set_duplicate_xinput_hidden(&active_bottle(&state).unwrap(), true).unwrap();
-            assert!(duplicate_xinput_hidden(&external).unwrap());
-            assert_eq!(
-                fs::read(default.join("cxbottle.conf")).unwrap(),
-                default_config
-            );
-            set_duplicate_xinput_hidden(&active_bottle(&state).unwrap(), false).unwrap();
-            assert_eq!(
-                fs::read(external.join("cxbottle.conf")).unwrap(),
-                external_config
-            );
-            assert_eq!(
-                fs::read(default.join("cxbottle.conf")).unwrap(),
-                default_config
-            );
-            // An invalid explicit selection must never edit another bottle.
-            state.set_bottle_path(Some(root.join("missing")));
-            assert_eq!(active_bottle(&state), None);
-            state.set_bottle_path(Some(root.clone()));
-            assert_eq!(active_bottle(&state), None);
-            state.set_bottle_path(None);
-            assert_eq!(active_bottle(&state), Some(default));
-            fs::remove_dir_all(root).unwrap();
         }
+        status_item.setMenu(Some(&menu));
+        log::info!(
+            "CrossPuck audio-only app started; language={}",
+            language.code()
+        );
+        app.run();
+        audio.shutdown();
+        menu.setDelegate(None);
+        app.setDelegate(None);
+        bar.removeStatusItem(&status_item);
     }
 }

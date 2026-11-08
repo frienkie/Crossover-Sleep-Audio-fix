@@ -1,6 +1,4 @@
-//! Audio routing has its own process and lifetime, independent of the HID
-//! bridge and selected Steam bottle. No PCM crosses this control channel.
-use objc2_foundation::{NSOperatingSystemVersion, NSProcessInfo};
+//! Supervise the isolated audio helper. No PCM crosses this control channel.
 use serde::Deserialize;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -20,7 +18,6 @@ pub enum Status {
     Routing { output: String, processes: usize },
     Retrying,
     AnotherInstance,
-    Unsupported,
     MissingHelper,
 }
 
@@ -31,14 +28,13 @@ impl Status {
             Self::Starting => "Starting…".into(),
             Self::Stopping => "Restoring original output…".into(),
             Self::Waiting(output) if !output.is_empty() => {
-                format!("Following {output}")
+                format!("Monitoring {output}")
             }
             Self::Waiting(_) => "Waiting for an output device".into(),
             Self::Connecting(output) => format!("Connecting to {output} — check audio permission"),
-            Self::Routing { output, .. } => format!("Playing through {output}"),
+            Self::Routing { output, .. } => format!("Rerouting to {output}"),
             Self::Retrying => "Unavailable — retrying; check audio permission".into(),
             Self::AnotherInstance => "Handled by another CrossPuck".into(),
-            Self::Unsupported => "Requires macOS 14.2 or later".into(),
             Self::MissingHelper => "Helper unavailable — rebuild or reinstall CrossPuck".into(),
         };
         format!("Audio: {text}")
@@ -49,7 +45,6 @@ struct Shared {
     enabled: AtomicBool,
     revision: AtomicU64,
     stopping: AtomicBool,
-    supported: bool,
     status: Mutex<Status>,
     wake: Mutex<Option<Thread>>,
 }
@@ -82,25 +77,11 @@ pub struct AudioService(Arc<ServiceOwner>);
 
 impl AudioService {
     pub fn start(enabled: bool) -> Self {
-        let supported = NSProcessInfo::processInfo().isOperatingSystemAtLeastVersion(
-            NSOperatingSystemVersion {
-                majorVersion: 14,
-                minorVersion: 2,
-                patchVersion: 0,
-            },
-        );
-        Self::with_support(enabled, supported)
-    }
-
-    fn with_support(enabled: bool, supported: bool) -> Self {
         let shared = Arc::new(Shared {
             enabled: AtomicBool::new(enabled),
             revision: AtomicU64::new(0),
             stopping: AtomicBool::new(false),
-            supported,
-            status: Mutex::new(if !supported {
-                Status::Unsupported
-            } else if enabled {
+            status: Mutex::new(if enabled {
                 Status::Starting
             } else {
                 Status::Off
@@ -111,7 +92,7 @@ impl AudioService {
             shared: Arc::clone(&shared),
             worker: Mutex::new(None),
         });
-        if supported {
+        {
             let worker_state = Arc::clone(&shared);
             match thread::Builder::new()
                 .name("crosspuck-audio".into())
@@ -129,9 +110,6 @@ impl AudioService {
 
     pub fn enabled(&self) -> bool {
         self.0.shared.enabled.load(Ordering::Acquire)
-    }
-    pub fn supported(&self) -> bool {
-        self.0.shared.supported
     }
     pub fn status(&self) -> Status {
         self.0.shared.status.lock().unwrap().clone()
@@ -390,7 +368,7 @@ mod tests {
 
     #[test]
     fn dropping_last_handle_stops_parked_worker_and_releases_state() {
-        let service = AudioService::with_support(false, true);
+        let service = AudioService::start(false);
         let shared = Arc::downgrade(&service.0.shared);
         let clone = service.clone();
         drop(service);
@@ -403,7 +381,7 @@ mod tests {
 
     #[test]
     fn shutdown_is_idempotent_and_wakes_disabled_worker() {
-        let service = AudioService::with_support(false, true);
+        let service = AudioService::start(false);
         service.shutdown();
         service.shutdown();
         assert_eq!(service.status(), Status::Off);

@@ -1,32 +1,19 @@
 [workspace]
-members = [
-    "crates/crosspuck-core",
-    "crates/crosspuck-cli",
-    "crates/crosspuck-app",
-    "crates/crosspuck-driver",
-]
+members = ["crates/crosspuck-app"]
 resolver = "2"
 
 [workspace.package]
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 license = "Apache-2.0"
 authors = ["scryner <scryner@gmail.com>"]
 
-[workspace.dependencies]
-crosspuck-core = { path = "crates/crosspuck-core" }
-hidapi = { version = "2.6", features = ["macos-shared-device"] }
-objc2 = "0.6"
-objc2-app-kit = "0.3"
-objc2-foundation = "0.3"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-sha2 = "0.10"
-log = "0.4"
-oslog = "0.2"
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
 
-# Build-time proc-macro dylibs must keep their symbol-table alignment on
-# macOS 27 with older rustc/LLVM (rust-lang/rust#157750). This does not change
-# optimization or stripping of the shipped application or Windows driver.
+# Avoid the macOS 27 build-time proc-macro alignment issue on older LLVM.
 [profile.release.build-override]
 strip = "none"
